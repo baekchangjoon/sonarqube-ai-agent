@@ -1,0 +1,28 @@
+# Environment & secrets
+.env
+*.env.local
+
+# Java build artifacts
+**/target/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# E2E test workspace (generated)
+test-env/e2e-fix-test/
+
+# Gemini CLI cache
+.gemini/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db

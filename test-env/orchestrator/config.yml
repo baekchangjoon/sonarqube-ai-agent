@@ -1,0 +1,40 @@
+agent:
+  type: "claude-code"
+
+  kiro:
+    agent_name: "sonarqube-fixer"
+    trust_all_tools: true
+
+  claude:
+    allowed_tools: "Read,Write,Edit"
+    model: "sonnet"
+
+  gemini: {}
+
+  bedrock:
+    model_id: "anthropic.claude-sonnet-4-20250514"
+    region: "us-east-1"
+
+sonarqube:
+  url: "${SONAR_URL}"
+  token: "${SONAR_TOKEN}"
+  main_project_key: "sonarqube-agent-test"
+
+scanner:
+  ephemeral_key_pattern: "{project}-pr-{pr_number}"
+
+modes:
+  pr_premerge:
+    enabled: true
+    delivery: "comment"
+
+  post_merge:
+    enabled: true
+
+  nightly_batch:
+    enabled: true
+    max_issues_per_run: 10
+    severity_filter:
+      - "BLOCKER"
+      - "CRITICAL"
+      - "MAJOR"
