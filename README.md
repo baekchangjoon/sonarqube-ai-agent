@@ -1,6 +1,13 @@
-# SonarQube AI Agent — Test Environment
+# SonarQube AI Agent
 
-Local test environment for developing and validating the SonarQube AI Agent Orchestrator.
+LLM-agnostic AI Agent Orchestrator for automated SonarQube defect remediation.
+
+## Documents
+
+| Document | Description |
+|----------|-------------|
+| [Governance Blueprint](docs/sonarqube_ai_agent_governance_blueprint.md) | RACI matrix, ownership model, operational process |
+| [Implementation Architecture](docs/ai_agent_implementation_architecture.md) | MCP Server, ephemeral project workflow, LLM abstraction |
 
 ## Prerequisites
 
@@ -20,7 +27,11 @@ Local test environment for developing and validating the SonarQube AI Agent Orch
 ## Architecture
 
 ```
-test-env/
+sonarqube-ai-agent/
+├── docs/
+│   ├── ai_agent_implementation_architecture.md
+│   └── sonarqube_ai_agent_governance_blueprint.md
+│
 ├── docker-compose.yml ──── SonarQube CE + PostgreSQL
 ├── .env.example ────────── Environment variable template
 ├── .env ────────────────── (generated) SONAR_URL + SONAR_TOKEN
@@ -235,7 +246,7 @@ docker run --rm -v "$(pwd)":/project -w /project \
   maven:3.9-eclipse-temurin-17 mvn -q clean compile test-compile
 
 # 4. Create ephemeral SonarQube project and scan
-source ../.env
+source .env
 curl -sf -u admin:admin1 -X POST \
   "$SONAR_URL/api/projects/create?name=e2e-fix-test&project=e2e-fix-test"
 

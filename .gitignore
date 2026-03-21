@@ -13,7 +13,7 @@ __pycache__/
 *.egg-info/
 
 # E2E test workspace (generated)
-test-env/e2e-fix-test/
+e2e-fix-test/
 
 # Gemini CLI cache
 .gemini/
