@@ -46,11 +46,23 @@ class SonarQubeOrchestrator:
         self._config = config
         self._sonar = SonarQubeClient(config.sonarqube)
         self._agent: LLMAgent = AgentFactory.create(config.agent)
+        # Judge role (FP triage, fix review): harness-free judgment
+        # calls, routable to a different backend/model than the fixer.
+        if config.agent.judge_type or config.agent.judge_model:
+            self._judge: LLMAgent = AgentFactory.create(
+                config.agent,
+                agent_type=config.agent.judge_type or None,
+                model=config.agent.judge_model or None,
+            )
+        else:
+            self._judge = self._agent
         self._github = GitHubClient()
 
         logger.info(
-            "Orchestrator initialized (agent=%s, sonar=%s, pr_mode=%s)",
-            self._agent.name(), config.sonarqube.url, config.scanner.pr_mode,
+            "Orchestrator initialized (fixer=%s, judge=%s, sonar=%s, "
+            "pr_mode=%s)",
+            self._agent.name(), self._judge.name(),
+            config.sonarqube.url, config.scanner.pr_mode,
         )
 
     @property
@@ -296,13 +308,13 @@ class SonarQubeOrchestrator:
 
     def _triage_issue(self, issue: SonarIssue,
                       working_dir: str) -> TriageResult:
-        prompt = self._agent.build_triage_prompt(
+        prompt = self._judge.build_triage_prompt(
             issue_rule=issue.rule, issue_message=issue.message,
             file_path=issue.file_path, line=issue.line,
             source_context=self._get_source_context(issue),
         )
         try:
-            raw = self._agent.generate_triage(prompt, working_dir)
+            raw = self._judge.generate_triage(prompt, working_dir)
         except Exception as e:
             logger.warning("Triage failed for %s: %s — treating as "
                            "true positive", issue.key, e)
@@ -372,7 +384,7 @@ class SonarQubeOrchestrator:
                             before, after, working_dir) -> FixResult:
         diff = _unified_diff(before, after, issue.file_path)
         review = self._review_outcome(
-            self._agent.build_fix_review_prompt(
+            self._judge.build_fix_review_prompt(
                 issue_rule=issue.rule, issue_message=issue.message,
                 file_path=issue.file_path, line=issue.line, diff=diff,
             ),
@@ -394,7 +406,7 @@ class SonarQubeOrchestrator:
     def _build_reviewed_fp_skip(self, issue, source_context,
                                 claim_reason, working_dir):
         review = self._review_outcome(
-            self._agent.build_fp_review_prompt(
+            self._judge.build_fp_review_prompt(
                 issue_rule=issue.rule, issue_message=issue.message,
                 file_path=issue.file_path, line=issue.line,
                 source_context=source_context, claim_reason=claim_reason,
@@ -416,7 +428,7 @@ class SonarQubeOrchestrator:
                         valid_assessments) -> TriageResult:
         """Independent read-only LLM assessment of a fix or FP claim."""
         try:
-            raw = self._agent.generate_triage(prompt, working_dir)
+            raw = self._judge.generate_triage(prompt, working_dir)
         except Exception as e:
             logger.warning("Review failed for %s: %s", issue.key, e)
             return TriageResult("UNKNOWN", None, f"review error: {e}")

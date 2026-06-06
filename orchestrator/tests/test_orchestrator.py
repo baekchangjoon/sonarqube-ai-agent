@@ -52,6 +52,70 @@ def _make_orchestrator(config=None):
     return orch
 
 
+class TestJudgeAgentRouting:
+    """구성 A: fixer and judge can be different agents."""
+
+    def _make_split_orchestrator(self):
+        config = _make_config(
+            agent=AgentConfig(type="claude-code", judge_type="bedrock-api"),
+            assessment=AssessmentConfig(strategy="triage"),
+        )
+        fixer, judge = MagicMock(), MagicMock()
+        fixer.name.return_value = "Fixer"
+        judge.name.return_value = "Judge"
+        fixer.generate_fix.return_value = "fixed code"
+        judge.generate_triage.return_value = (
+            '{"verdict": "TRUE_POSITIVE", "confidence": 0.9, "reason": "r"}'
+        )
+        with patch("src.orchestrator.AgentFactory") as mock_factory:
+            mock_factory.create.side_effect = [fixer, judge]
+            orch = SonarQubeOrchestrator(config)
+        orch._sonar = MagicMock()
+        orch._github = MagicMock()
+        orch._sonar.get_source_lines.return_value = ["line"]
+        return orch, fixer, judge
+
+    def test_judge_created_with_overrides(self):
+        config = _make_config(
+            agent=AgentConfig(type="claude-code",
+                              judge_type="bedrock-api",
+                              judge_model="m1"),
+        )
+        with patch("src.orchestrator.AgentFactory") as mock_factory:
+            mock_factory.create.return_value = MagicMock()
+            SonarQubeOrchestrator(config)
+        assert mock_factory.create.call_count == 2
+        judge_call = mock_factory.create.call_args_list[1]
+        assert judge_call[1]["agent_type"] == "bedrock-api"
+        assert judge_call[1]["model"] == "m1"
+
+    def test_no_judge_config_reuses_fix_agent(self):
+        orch = _make_orchestrator()
+        assert orch._judge is orch._agent
+
+    def test_triage_goes_to_judge_fix_goes_to_fixer(self):
+        orch, fixer, judge = self._make_split_orchestrator()
+
+        fixes, skipped = orch._triage_and_fix(
+            [_make_issue("K1")], "/tmp/proj")
+
+        judge.generate_triage.assert_called_once()
+        fixer.generate_fix.assert_called_once()
+        fixer.generate_triage.assert_not_called()
+        assert len(fixes) == 1 and not skipped
+
+    def test_judge_model_only_override(self):
+        config = _make_config(
+            agent=AgentConfig(type="claude-code", judge_model="opus"),
+        )
+        with patch("src.orchestrator.AgentFactory") as mock_factory:
+            mock_factory.create.return_value = MagicMock()
+            SonarQubeOrchestrator(config)
+        judge_call = mock_factory.create.call_args_list[1]
+        assert judge_call[1]["agent_type"] is None
+        assert judge_call[1]["model"] == "opus"
+
+
 class TestOrchestratorEphemeralKey:
 
     def test_ephemeral_key_format(self):

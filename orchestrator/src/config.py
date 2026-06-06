@@ -8,6 +8,11 @@ import yaml
 @dataclass
 class AgentConfig:
     type: str = "claude-code"
+    # Judge role (FP triage, fix review) — judgment calls need no
+    # file-editing harness, so any backend works (e.g. bedrock-api).
+    # Defaults to the fix agent's type/model when unset.
+    judge_type: str = ""
+    judge_model: str = ""
     kiro: dict = field(default_factory=dict)
     claude: dict = field(default_factory=dict)
     gemini: dict = field(default_factory=dict)
@@ -108,6 +113,8 @@ def _load_raw_yaml(config_path: str = None) -> dict:
 def _parse_agent(raw: dict) -> AgentConfig:
     return AgentConfig(
         type=raw.get("type", "claude-code"),
+        judge_type=raw.get("judge_type", ""),
+        judge_model=raw.get("judge_model", ""),
         kiro=raw.get("kiro", {}),
         claude=raw.get("claude", {}),
         gemini=raw.get("gemini", {}),

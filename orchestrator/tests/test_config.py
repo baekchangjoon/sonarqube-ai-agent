@@ -108,6 +108,27 @@ class TestAppConfig:
         assert config.nightly_batch.create_fix_pr is False
         assert config.nightly_batch.fix_pr_base == "main"
 
+    def test_judge_defaults_empty(self, tmp_path):
+        config_path = tmp_path / "c.yml"
+        config_path.write_text(yaml.dump({}))
+        config = AppConfig.load(str(config_path))
+        assert config.agent.judge_type == ""
+        assert config.agent.judge_model == ""
+
+    def test_judge_overrides(self, tmp_path):
+        custom = {
+            "agent": {
+                "type": "claude-code",
+                "judge_type": "bedrock-api",
+                "judge_model": "global.anthropic.claude-opus-4-6",
+            },
+        }
+        config_path = tmp_path / "c.yml"
+        config_path.write_text(yaml.dump(custom))
+        config = AppConfig.load(str(config_path))
+        assert config.agent.judge_type == "bedrock-api"
+        assert config.agent.judge_model == "global.anthropic.claude-opus-4-6"
+
     def test_assessment_default_none(self, tmp_path):
         config_path = tmp_path / "c.yml"
         config_path.write_text(yaml.dump({}))

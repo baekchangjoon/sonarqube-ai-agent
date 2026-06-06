@@ -52,6 +52,23 @@ class TestAgentFactory:
         with pytest.raises(ValueError):
             AgentFactory.create(config)
 
+    def test_create_with_type_override(self):
+        config = AgentConfig(type="claude-code")
+        agent = AgentFactory.create(config, agent_type="bedrock-api")
+        assert isinstance(agent, BedrockAPIAgent)
+
+    def test_create_with_model_override(self):
+        config = AgentConfig(type="claude-code", claude={"model": "sonnet"})
+        agent = AgentFactory.create(config, model="opus")
+        assert "opus" in agent.name()
+
+    def test_create_bedrock_with_model_override(self):
+        config = AgentConfig(type="claude-code",
+                             bedrock={"model_id": "default-model"})
+        agent = AgentFactory.create(config, agent_type="bedrock-api",
+                                    model="global.anthropic.claude-opus-4-6")
+        assert "claude-opus-4-6" in agent.name()
+
 
 class TestLLMAgentInterface:
 
@@ -72,6 +89,37 @@ class TestLLMAgentInterface:
         assert "Foo.java" in prompt
         assert "42" in prompt
         assert "in place" in prompt
+
+
+class TestBedrockConverse:
+
+    def test_converse_call_shape_and_usage(self):
+        from unittest.mock import MagicMock
+        agent = BedrockAPIAgent(model_id="global.amazon.nova-2-lite-v1:0",
+                                region="ap-northeast-2")
+        mock_client = MagicMock()
+        mock_client.converse.return_value = {
+            "output": {"message": {"content": [{"text": "FALSE_POSITIVE"}]}},
+            "usage": {"inputTokens": 120, "outputTokens": 15},
+        }
+        agent._client = mock_client
+
+        result = agent.generate_fix("judge this", "/tmp")
+
+        assert result == "FALSE_POSITIVE"
+        kwargs = mock_client.converse.call_args[1]
+        assert kwargs["modelId"] == "global.amazon.nova-2-lite-v1:0"
+        assert kwargs["messages"][0]["content"][0]["text"] == "judge this"
+        assert agent.usage == {"input_tokens": 120, "output_tokens": 15}
+
+    def test_converse_error_returns_empty(self):
+        from unittest.mock import MagicMock
+        agent = BedrockAPIAgent()
+        mock_client = MagicMock()
+        mock_client.converse.side_effect = Exception("AccessDenied")
+        agent._client = mock_client
+
+        assert agent.generate_fix("p", "/tmp") == ""
 
 
 class TestFixResult:

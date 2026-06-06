@@ -1,6 +1,9 @@
 # Remote SonarQube (CE + community branch/PR plugin) — native PR mode
 agent:
   type: "claude-code"
+  # 구성 A: 수정=Sonnet(하네스), 판정·리뷰=Opus(독립 judge)
+  judge_type: "claude-code"
+  judge_model: "opus"
 
   claude:
     allowed_tools: "Read,Write,Edit"

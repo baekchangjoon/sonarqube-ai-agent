@@ -1,5 +1,12 @@
 agent:
   type: "claude-code"
+  # Judge role (FP triage, fix review) — harness-free judgment calls,
+  # routable to a different backend/model than the fixer. Examples:
+  #   judge_type: "claude-code"   judge_model: "opus"   (fixer=Sonnet, judge=Opus)
+  #   judge_type: "bedrock-api"   judge_model: "global.anthropic.claude-opus-4-6"
+  # Unset = same agent as the fixer.
+  judge_type: ""
+  judge_model: ""
 
   kiro:
     agent_name: "sonarqube-fixer"
