@@ -54,8 +54,8 @@ sonarqube-ai-agent/
 │   └── 99-teardown.sh             Stop everything
 │
 ├── orchestrator/  ──────── Python AI Agent Orchestrator
-│   ├── config.yml                 Agent, SonarQube, scanner (pr_mode),
-│   │                              assessment strategy, mode settings
+│   ├── config.yml                 Agents (fixer/judge), SonarQube, scanner
+│   │                              (pr_mode), assessment strategy, modes
 │   ├── requirements.txt           Python dependencies
 │   ├── pytest.ini                 Test runner config
 │   ├── src/
@@ -71,12 +71,17 @@ sonarqube-ai-agent/
 │   │       ├── claude_code.py     Claude Code  (-p --permission-mode acceptEdits)
 │   │       ├── gemini_cli.py      Gemini CLI   (--yolo -p)
 │   │       ├── kiro_cli.py        AWS Kiro CLI (--no-interactive)
-│   │       └── bedrock_api.py     AWS Bedrock API fallback
+│   │       ├── bedrock_api.py     AWS Bedrock Converse (judge-oriented;
+│   │       │                      no harness — cannot edit files)
+│   │       └── pricing.py         Token price table for cost estimation
 │   └── tests/
 │       ├── test_config.py
 │       ├── test_agents.py
 │       ├── test_sonarqube_client.py   Unit + Integration
 │       └── test_orchestrator.py
+│
+├── demo/false-positive-triage/ ── Conference demo: rules vs LLM (0/3 vs 3/3)
+├── benchmark/fp-corpus/ ── Labeled false-positive corpus for judge evaluation
 │
 └── e2e-fix-test/ ───────── (generated) E2E fix validation workspace
 ```
@@ -147,7 +152,10 @@ Each mode prints a JSON result:
   "issues_skipped_as_fp": 1,
   "fixes_attempted": 2,
   "fixes_verified": 2,
-  "quality_gate": "ERROR"
+  "quality_gate": "ERROR",
+  "llm_input_tokens": 345131,
+  "llm_output_tokens": 1726,
+  "llm_cost_usd": 0.4118
 }
 ```
 
@@ -180,6 +188,13 @@ scan → issues → FP assessment → LLM fix (in place) → rebuild + re-scan �
      **independent** LLM call reviews the applied diff (or the FP claim)
      and provides the confidence, avoiding self-assessment bias.
      Unparseable/failed judgments fall back to "fix it" (the safe default).
+
+   Judgment calls need no file-editing harness, so they can run on a
+   different backend/model than the fixer (`agent.judge_type` /
+   `agent.judge_model`) — e.g. fixer = Sonnet via Claude Code, judge =
+   Opus 4.6 via Bedrock Converse. When SonarQube cannot serve an
+   issue's source (files new in a PR), the judge prompt falls back to
+   the local checkout.
 3. **Fix** — the agent CLI edits files in the working dir directly
    (`claude -p --permission-mode acceptEdits`, `gemini --yolo`, ...).
    Issues are processed sequentially so later fixes see earlier ones.
@@ -193,13 +208,18 @@ scan → issues → FP assessment → LLM fix (in place) → rebuild + re-scan �
 
 Reports, commit messages, and Fix PR bodies include per-fix and per-skip
 confidences, labelled `LLM-assessed` (uncalibrated — treat as a triage
-priority signal, not a probability).
+priority signal, not a probability). Reports and the result JSON also
+carry an **LLM Usage** breakdown — tokens and cost per role (fixer /
+judge) and a run total. Claude Code reports its own cost
+(`--output-format json`); Bedrock cost is estimated from Converse usage
+via `agents/pricing.py` (unknown models report tokens only).
 
 ## Configuration Reference (config.yml)
 
 | Key | Values | Description |
 |-----|--------|-------------|
-| `agent.type` | `claude-code` `gemini-cli` `kiro-cli` `bedrock-api` | LLM agent backend (`bedrock-api` is suggestion-only — it cannot edit files) |
+| `agent.type` | `claude-code` `gemini-cli` `kiro-cli` `bedrock-api` | Fix agent backend (`bedrock-api` has no harness — judgment/suggestion only) |
+| `agent.judge_type` / `judge_model` | agent type / model id | Separate backend/model for judgment calls (FP triage, fix review); unset = fix agent |
 | `sonarqube.url` / `token` | `${ENV}` supported | SonarQube server + auth |
 | `sonarqube.main_project_key` | string | Main branch project |
 | `scanner.pr_mode` | `ephemeral` / `native` | PR analysis strategy (Mode 1) |
@@ -265,6 +285,7 @@ Below are the verified CLI invocations:
 
 ```bash
 claude -p \
+  --output-format json \
   --permission-mode acceptEdits \
   --allowedTools "Read,Write,Edit" \
   "Fix SonarQube issue S2095 in UserService.java ..." \
@@ -274,6 +295,7 @@ claude -p \
 | Flag | Purpose |
 |------|---------|
 | `-p` / `--print` | Headless mode — print response and exit |
+| `--output-format json` | JSON envelope with `result`, `usage`, `total_cost_usd` |
 | `--permission-mode acceptEdits` | Auto-approve file edits without prompting |
 | `--allowedTools "Read,Write,Edit"` | Restrict to file operation tools only |
 | `< /dev/null` | **Required** — prevents 3-second stdin wait |
