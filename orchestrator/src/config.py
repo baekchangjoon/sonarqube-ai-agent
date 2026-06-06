@@ -64,10 +64,13 @@ class NightlyBatchConfig:
 
 
 @dataclass
-class TriageConfig:
-    # LLM false-positive screening before each fix.
-    # FALSE_POSITIVE verdict → skip the fix and report with confidence.
-    enabled: bool = False
+class AssessmentConfig:
+    # False-positive / fix-quality assessment strategy:
+    #   "none":   fix every issue, no screening
+    #   "triage": pre-fix LLM judgment; FALSE_POSITIVE → skip + report (C)
+    #   "review": fix-with-FP-escape, then an independent LLM call
+    #             assesses the fix or the FP claim (D)
+    strategy: str = "none"
 
 
 @dataclass
@@ -78,7 +81,7 @@ class AppConfig:
     pr_premerge: PrPremergeConfig
     post_merge: PostMergeConfig
     nightly_batch: NightlyBatchConfig
-    triage: TriageConfig = field(default_factory=TriageConfig)
+    assessment: AssessmentConfig = field(default_factory=AssessmentConfig)
 
     @staticmethod
     def load(config_path: str = None) -> "AppConfig":
@@ -91,9 +94,7 @@ class AppConfig:
             pr_premerge=_parse_pr_premerge(modes_raw),
             post_merge=_parse_post_merge(modes_raw),
             nightly_batch=_parse_nightly(modes_raw),
-            triage=TriageConfig(
-                enabled=raw.get("triage", {}).get("enabled", False),
-            ),
+            assessment=_parse_assessment(raw.get("assessment", {})),
         )
 
 
@@ -172,6 +173,16 @@ def _parse_nightly(modes_raw: dict) -> NightlyBatchConfig:
         fix_pr_repo=fix_pr_raw.get("repo", ""),
         fix_pr_base=fix_pr_raw.get("base", "main"),
     )
+
+
+def _parse_assessment(raw: dict) -> AssessmentConfig:
+    strategy = (raw or {}).get("strategy", "none")
+    if strategy not in ("none", "triage", "review"):
+        raise ValueError(
+            f"assessment.strategy must be 'none', 'triage' or 'review', "
+            f"got: {strategy}"
+        )
+    return AssessmentConfig(strategy=strategy)
 
 
 def _resolve_env(value: str) -> str:

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 from src.agents.base import AgentType, FixResult
 from src.config import (
     AgentConfig, AppConfig, NightlyBatchConfig, PostMergeConfig,
-    PrPremergeConfig, ScannerConfig, SonarQubeConfig, TriageConfig,
+    PrPremergeConfig, ScannerConfig, AssessmentConfig, SonarQubeConfig,
 )
 from src.github_client import GitHubClient
 from src.orchestrator import SonarQubeOrchestrator
@@ -458,7 +458,7 @@ class TestFpTriage:
 
     def _triage_orch(self):
         config = _make_config(
-            triage=TriageConfig(enabled=True),
+            assessment=AssessmentConfig(strategy="triage"),
             pr_premerge=PrPremergeConfig(delivery="log"),
         )
         orch = _make_orchestrator(config)
@@ -520,7 +520,7 @@ class TestFpTriage:
 
     def test_fp_report_in_pr_comment(self, _sleep):
         config = _make_config(
-            triage=TriageConfig(enabled=True),
+            assessment=AssessmentConfig(strategy="triage"),
             pr_premerge=PrPremergeConfig(delivery="comment"),
         )
         orch = _make_orchestrator(config)
@@ -543,7 +543,7 @@ class TestFpTriage:
 
     def test_fix_confidence_in_commit_message(self, _sleep):
         config = _make_config(
-            triage=TriageConfig(enabled=True),
+            assessment=AssessmentConfig(strategy="triage"),
             pr_premerge=PrPremergeConfig(delivery="log",
                                          push_fix_commit=True),
         )
@@ -565,6 +565,134 @@ class TestFpTriage:
         message = orch._github.commit_and_push.call_args[0][1]
         assert "Fix confidence" in message
         assert "0.80" in message
+
+
+@patch("src.orchestrator.time.sleep")
+class TestPostReview:
+    """Option D: fix-with-FP-escape + independent post-review."""
+
+    def _review_orch(self, tmp_path, fix_side_effect):
+        config = _make_config(
+            assessment=AssessmentConfig(strategy="review"),
+            pr_premerge=PrPremergeConfig(delivery="log"),
+        )
+        orch = _make_orchestrator(config)
+        orch._sonar.run_scanner.return_value = True
+        orch._sonar.get_quality_gate_status.return_value = "ERROR"
+        orch._sonar.get_source_lines.return_value = ["line"]
+        orch._agent.generate_fix.side_effect = fix_side_effect
+
+        target = tmp_path / "src/main/java/Foo.java"
+        target.parent.mkdir(parents=True)
+        target.write_text("class Foo { int bad; }\n")
+        return orch, target
+
+    def test_applied_fix_gets_independent_review(self, _sleep, tmp_path):
+        def fix(prompt, wd):
+            (tmp_path / "src/main/java/Foo.java").write_text(
+                "class Foo { }\n")
+            return '{"verdict": "FIXED", "reason": "removed field"}'
+
+        orch, _ = self._review_orch(tmp_path, fix)
+        orch._agent.generate_triage.return_value = (
+            '{"assessment": "APPROPRIATE", "confidence": 0.88, '
+            '"reason": "minimal correct change"}'
+        )
+        orch._sonar.get_open_issues.side_effect = [[_make_issue("K1")], []]
+
+        result = orch.handle_pr_premerge("o/r", 1, str(tmp_path))
+
+        orch._agent.generate_triage.assert_called_once()  # reviewer
+        orch._agent.build_fix_review_prompt.assert_called_once()
+        assert result.fixes_verified == 1
+
+    def test_reviewer_confidence_attached_to_fix(self, _sleep, tmp_path):
+        def fix(prompt, wd):
+            (tmp_path / "src/main/java/Foo.java").write_text(
+                "class Foo { }\n")
+            return "no json here"
+
+        orch, _ = self._review_orch(tmp_path, fix)
+        orch._agent.generate_triage.return_value = (
+            '{"assessment": "INAPPROPRIATE", "confidence": 0.35, '
+            '"reason": "breaks reflective access"}'
+        )
+        fixes, skipped = orch._triage_and_fix(
+            [_make_issue("K1")], str(tmp_path))
+
+        assert len(fixes) == 1 and not skipped
+        assert fixes[0].fix_confidence == 0.35
+        assert "INAPPROPRIATE" in fixes[0].explanation
+        assert "breaks reflective access" in fixes[0].explanation
+
+    def test_fp_escape_reviewed_and_skipped(self, _sleep, tmp_path):
+        def fix(prompt, wd):
+            return ('{"verdict": "FALSE_POSITIVE", '
+                    '"reason": "field used via reflection"}')
+
+        orch, _ = self._review_orch(tmp_path, fix)
+        orch._agent.generate_triage.return_value = (
+            '{"assessment": "AGREE_FALSE_POSITIVE", "confidence": 0.9, '
+            '"reason": "reflection confirmed"}'
+        )
+
+        fixes, skipped = orch._triage_and_fix(
+            [_make_issue("K1")], str(tmp_path))
+
+        assert not fixes and len(skipped) == 1
+        issue, triage = skipped[0]
+        assert triage.verdict == "FALSE_POSITIVE"
+        assert triage.confidence == 0.9
+        assert "reflection" in triage.reason
+
+    def test_fp_escape_with_reviewer_disagree_is_flagged(self, _sleep,
+                                                         tmp_path):
+        def fix(prompt, wd):
+            return '{"verdict": "FALSE_POSITIVE", "reason": "looks fine"}'
+
+        orch, _ = self._review_orch(tmp_path, fix)
+        orch._agent.generate_triage.return_value = (
+            '{"assessment": "DISAGREE", "confidence": 0.8, '
+            '"reason": "this is a real leak"}'
+        )
+
+        fixes, skipped = orch._triage_and_fix(
+            [_make_issue("K1")], str(tmp_path))
+
+        assert len(skipped) == 1
+        _, triage = skipped[0]
+        assert "DISAGREES" in triage.reason
+        assert "human review required" in triage.reason
+
+    def test_no_change_no_verdict_is_failed_fix(self, _sleep, tmp_path):
+        def fix(prompt, wd):
+            return "I could not decide."
+
+        orch, _ = self._review_orch(tmp_path, fix)
+
+        fixes, skipped = orch._triage_and_fix(
+            [_make_issue("K1")], str(tmp_path))
+
+        assert not skipped and len(fixes) == 1
+        assert fixes[0].success is False
+        orch._agent.generate_triage.assert_not_called()
+
+    def test_file_change_wins_over_fp_claim(self, _sleep, tmp_path):
+        def fix(prompt, wd):
+            (tmp_path / "src/main/java/Foo.java").write_text(
+                "class Foo { }\n")
+            return '{"verdict": "FALSE_POSITIVE", "reason": "but edited"}'
+
+        orch, _ = self._review_orch(tmp_path, fix)
+        orch._agent.generate_triage.return_value = (
+            '{"assessment": "APPROPRIATE", "confidence": 0.7, "reason": "ok"}'
+        )
+
+        fixes, skipped = orch._triage_and_fix(
+            [_make_issue("K1")], str(tmp_path))
+
+        # the edit happened, so it is treated as a fix and reviewed
+        assert len(fixes) == 1 and not skipped
 
 
 class TestOrchestratorSummary:

@@ -108,17 +108,28 @@ class TestAppConfig:
         assert config.nightly_batch.create_fix_pr is False
         assert config.nightly_batch.fix_pr_base == "main"
 
-    def test_triage_default_off(self, tmp_path):
+    def test_assessment_default_none(self, tmp_path):
         config_path = tmp_path / "c.yml"
         config_path.write_text(yaml.dump({}))
         config = AppConfig.load(str(config_path))
-        assert config.triage.enabled is False
+        assert config.assessment.strategy == "none"
 
-    def test_triage_enabled(self, tmp_path):
+    @pytest.mark.parametrize("strategy", ["none", "triage", "review"])
+    def test_assessment_strategies(self, tmp_path, strategy):
         config_path = tmp_path / "c.yml"
-        config_path.write_text(yaml.dump({"triage": {"enabled": True}}))
+        config_path.write_text(
+            yaml.dump({"assessment": {"strategy": strategy}})
+        )
         config = AppConfig.load(str(config_path))
-        assert config.triage.enabled is True
+        assert config.assessment.strategy == strategy
+
+    def test_invalid_assessment_strategy_raises(self, tmp_path):
+        config_path = tmp_path / "c.yml"
+        config_path.write_text(
+            yaml.dump({"assessment": {"strategy": "bogus"}})
+        )
+        with pytest.raises(ValueError):
+            AppConfig.load(str(config_path))
 
     def test_pr_premerge_push_fix_commit(self, tmp_path):
         custom = {

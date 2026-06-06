@@ -1,9 +1,11 @@
+import difflib
 import json
 import logging
 import re
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from src.agents.base import FixResult, LLMAgent, TriageResult
 from src.agents.factory import AgentFactory
@@ -262,29 +264,38 @@ class SonarQubeOrchestrator:
         fixes, skipped = self._triage_and_fix(issues, ".")
         return fixes, [], skipped
 
-    # ── False Positive Triage ───────────────
+    # ── False Positive / Fix-quality Assessment ──
 
     def _triage_and_fix(self, issues: list[SonarIssue],
                         working_dir: str):
-        """Screen each issue with a read-only LLM judgment first.
-        FALSE_POSITIVE verdict → skip the fix and report."""
+        """Dispatch on the configured assessment strategy.
+
+        "triage" (C): read-only pre-fix judgment, FP → skip + report.
+        "review" (D): fix-with-FP-escape, then an independent LLM call
+                      assesses the applied fix or the FP claim.
+        "none":       fix everything.
+        """
+        strategy = self._config.assessment.strategy
+        if strategy == "review":
+            return self._fix_with_post_review(issues, working_dir)
+
         fixes, skipped = [], []
         for issue in issues:
-            triage = self._triage_issue(issue, working_dir)
-            if triage and triage.verdict == "FALSE_POSITIVE":
-                logger.info(
-                    "FP triage skip: %s %s (confidence=%.2f) — %s",
-                    issue.rule, issue.key, triage.confidence, triage.reason,
-                )
-                skipped.append((issue, triage))
-                continue
+            if strategy == "triage":
+                triage = self._triage_issue(issue, working_dir)
+                if triage.verdict == "FALSE_POSITIVE":
+                    logger.info(
+                        "FP triage skip: %s %s (confidence=%.2f) — %s",
+                        issue.rule, issue.key, triage.confidence,
+                        triage.reason,
+                    )
+                    skipped.append((issue, triage))
+                    continue
             fixes.append(self._generate_single_fix(issue, working_dir))
         return fixes, skipped
 
     def _triage_issue(self, issue: SonarIssue,
                       working_dir: str) -> TriageResult:
-        if not self._config.triage.enabled:
-            return None
         prompt = self._agent.build_triage_prompt(
             issue_rule=issue.rule, issue_message=issue.message,
             file_path=issue.file_path, line=issue.line,
@@ -308,6 +319,115 @@ class SonarQubeOrchestrator:
         return TriageResult(
             verdict=data["verdict"],
             confidence=_safe_float(data.get("confidence"), 0.0),
+            reason=str(data.get("reason", "")),
+        )
+
+    # ── Option D: fix-with-escape + independent review ──
+
+    def _fix_with_post_review(self, issues: list[SonarIssue],
+                              working_dir: str):
+        fixes, skipped = [], []
+        for issue in issues:
+            kind, result = self._fix_or_escape(issue, working_dir)
+            if kind == "skip":
+                skipped.append(result)
+            else:
+                fixes.append(result)
+        return fixes, skipped
+
+    def _fix_or_escape(self, issue: SonarIssue, working_dir: str):
+        source_context = self._get_source_context(issue)
+        prompt = self._agent.build_fix_or_escape_prompt(
+            issue_rule=issue.rule, issue_message=issue.message,
+            file_path=issue.file_path, line=issue.line,
+            source_context=source_context,
+        )
+        target = Path(working_dir) / issue.file_path
+        before = target.read_text() if target.exists() else ""
+
+        try:
+            raw = self._agent.generate_fix(prompt, working_dir)
+        except Exception as e:
+            logger.error("Fix failed for %s: %s", issue.key, str(e))
+            return "fix", _empty_fix(issue, source_context, str(e))
+
+        after = target.read_text() if target.exists() else ""
+        data = _extract_json(raw) or {}
+
+        if before != after:  # a fix was applied — review the diff
+            return "fix", self._build_reviewed_fix(
+                issue, source_context, raw, before, after, working_dir,
+            )
+        if data.get("verdict") == "FALSE_POSITIVE":
+            return "skip", self._build_reviewed_fp_skip(
+                issue, source_context, str(data.get("reason", "")),
+                working_dir,
+            )
+        return "fix", _empty_fix(
+            issue, source_context,
+            "No change applied and no false-positive verdict",
+        )
+
+    def _build_reviewed_fix(self, issue, source_context, raw,
+                            before, after, working_dir) -> FixResult:
+        diff = _unified_diff(before, after, issue.file_path)
+        review = self._review_outcome(
+            self._agent.build_fix_review_prompt(
+                issue_rule=issue.rule, issue_message=issue.message,
+                file_path=issue.file_path, line=issue.line, diff=diff,
+            ),
+            issue, working_dir, ("APPROPRIATE", "INAPPROPRIATE"),
+        )
+        explanation = f"Fix for {issue.rule}: {issue.message}"
+        if review.verdict != "APPROPRIATE":
+            explanation += f" [review: {review.verdict} — {review.reason}]"
+        logger.info("Fix review: %s %s (confidence=%s)",
+                    issue.key, review.verdict,
+                    _fmt_confidence(review.confidence))
+        return FixResult(
+            success=True, issue_key=issue.key,
+            file_path=issue.file_path, original_code=source_context,
+            fixed_code=raw, test_code="", explanation=explanation,
+            fix_confidence=review.confidence,
+        )
+
+    def _build_reviewed_fp_skip(self, issue, source_context,
+                                claim_reason, working_dir):
+        review = self._review_outcome(
+            self._agent.build_fp_review_prompt(
+                issue_rule=issue.rule, issue_message=issue.message,
+                file_path=issue.file_path, line=issue.line,
+                source_context=source_context, claim_reason=claim_reason,
+            ),
+            issue, working_dir, ("AGREE_FALSE_POSITIVE", "DISAGREE"),
+        )
+        if review.verdict == "DISAGREE":
+            reason = (f"claim: {claim_reason}; reviewer DISAGREES — "
+                      f"human review required ({review.reason})")
+        else:
+            reason = f"claim: {claim_reason}; review: {review.reason}"
+        logger.info("FP claim review: %s %s (confidence=%s)",
+                    issue.key, review.verdict,
+                    _fmt_confidence(review.confidence))
+        return issue, TriageResult("FALSE_POSITIVE",
+                                   review.confidence, reason)
+
+    def _review_outcome(self, prompt, issue, working_dir,
+                        valid_assessments) -> TriageResult:
+        """Independent read-only LLM assessment of a fix or FP claim."""
+        try:
+            raw = self._agent.generate_triage(prompt, working_dir)
+        except Exception as e:
+            logger.warning("Review failed for %s: %s", issue.key, e)
+            return TriageResult("UNKNOWN", None, f"review error: {e}")
+        data = _extract_json(raw)
+        if not data or data.get("assessment") not in valid_assessments:
+            logger.warning("Unparseable review for %s", issue.key)
+            return TriageResult("UNKNOWN", None,
+                                "unparseable review response")
+        return TriageResult(
+            verdict=data["assessment"],
+            confidence=_safe_float(data.get("confidence"), None),
             reason=str(data.get("reason", "")),
         )
 
@@ -472,7 +592,7 @@ def _summarize_fixes(fixes: list[FixResult]) -> str:
     if not fixes:
         return "No automated fixes were generated."
     lines = [f"**{len(fixes)} fix(es)** verified by re-scan "
-             f"(confidence = LLM self-reported):\n"]
+             f"(confidence = LLM-assessed):\n"]
     for fix in fixes:
         lines.append(f"- `{fix.file_path}` — {fix.explanation} "
                      f"[fix confidence: {_fmt_confidence(fix.fix_confidence)}]")
@@ -483,9 +603,8 @@ def _summarize_fp_skips(skipped) -> str:
     """Report issues the LLM triage judged as false positives."""
     if not skipped:
         return ""
-    lines = [f"**{len(skipped)} issue(s)** judged as false positive by "
-             f"LLM triage and skipped (confidence = LLM self-reported, "
-             f"please review):\n"]
+    lines = [f"**{len(skipped)} issue(s)** judged as false positive "
+             f"and skipped (confidence = LLM-assessed, please review):\n"]
     for issue, triage in skipped:
         lines.append(
             f"- `{issue.file_path}:{issue.line}` {issue.rule} — "
@@ -501,7 +620,7 @@ def _confidence_note(verified) -> str:
              if f.fix_confidence is not None]
     if not confs:
         return ""
-    return (f"\n\nFix confidence (LLM self-reported): "
+    return (f"\n\nFix confidence (LLM-assessed): "
             f"avg {sum(confs) / len(confs):.2f}, min {min(confs):.2f}")
 
 
@@ -533,3 +652,14 @@ def _safe_float(value, default):
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _unified_diff(before: str, after: str, file_path: str,
+                  max_chars: int = 6000) -> str:
+    diff = "".join(difflib.unified_diff(
+        before.splitlines(keepends=True), after.splitlines(keepends=True),
+        fromfile=f"a/{file_path}", tofile=f"b/{file_path}",
+    ))
+    if len(diff) > max_chars:
+        diff = diff[:max_chars] + "\n... (diff truncated)"
+    return diff
