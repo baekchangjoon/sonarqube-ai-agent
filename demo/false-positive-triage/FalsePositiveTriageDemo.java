@@ -206,10 +206,10 @@ public class FalsePositiveTriageDemo {
 
     // ── 스코어보드 ──────────────────────────────────────────────
 
-    static final String RED = "\u001B[31m";
-    static final String GREEN = "\u001B[32m";
-    static final String BOLD = "\u001B[1m";
-    static final String RESET = "\u001B[0m";
+    static final String RED = "\u001B[31m";
+    static final String GREEN = "\u001B[32m";
+    static final String BOLD = "\u001B[1m";
+    static final String RESET = "\u001B[0m";
 
     public static void main(String[] args) {
         boolean live = args.length > 0 && args[0].equals("--live");
