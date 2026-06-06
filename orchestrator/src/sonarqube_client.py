@@ -97,7 +97,8 @@ class SonarQubeClient:
     def get_open_issues(self, project_key: str,
                         issue_types: Optional[list] = None,
                         severities: Optional[list] = None,
-                        max_results: int = 100) -> list[SonarIssue]:
+                        max_results: int = 100,
+                        pull_request: Optional[str] = None) -> list[SonarIssue]:
         params = {
             "componentKeys": project_key,
             "statuses": "OPEN,CONFIRMED",
@@ -107,6 +108,8 @@ class SonarQubeClient:
             params["types"] = ",".join(issue_types)
         if severities:
             params["severities"] = ",".join(severities)
+        if pull_request:
+            params["pullRequest"] = pull_request
 
         resp = self._get("/api/issues/search", params=params)
         raw_issues = resp.get("issues", [])
@@ -133,10 +136,12 @@ class SonarQubeClient:
 
     # ── Quality Gate ─────────────────────────
 
-    def get_quality_gate_status(self, project_key: str) -> str:
-        resp = self._get("/api/qualitygates/project_status", params={
-            "projectKey": project_key,
-        })
+    def get_quality_gate_status(self, project_key: str,
+                                pull_request: Optional[str] = None) -> str:
+        params = {"projectKey": project_key}
+        if pull_request:
+            params["pullRequest"] = pull_request
+        resp = self._get("/api/qualitygates/project_status", params=params)
         return resp.get("projectStatus", {}).get("status", "UNKNOWN")
 
     # ── Measures ─────────────────────────────
@@ -175,9 +180,11 @@ class SonarQubeClient:
     @staticmethod
     def run_scanner(project_dir: str, project_key: str,
                     sonar_url: str, sonar_token: str,
-                    project_name: Optional[str] = None) -> bool:
+                    project_name: Optional[str] = None,
+                    extra_args: Optional[list] = None) -> bool:
         cmd = _build_scanner_cmd(
-            project_dir, project_key, sonar_token, project_name
+            project_dir, project_key, sonar_url, sonar_token,
+            project_name, extra_args,
         )
         logger.info("Running sonar-scanner for %s", project_key)
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -210,15 +217,12 @@ class SonarQubeClient:
 
 
 def _build_scanner_cmd(project_dir: str, project_key: str,
-                       sonar_token: str,
-                       project_name: str = None) -> list[str]:
-    import platform
-    host_url = ("http://host.docker.internal:9000"
-                if platform.system() == "Darwin"
-                else "http://172.17.0.1:9000")
-    return [
+                       sonar_url: str, sonar_token: str,
+                       project_name: str = None,
+                       extra_args: list = None) -> list[str]:
+    cmd = [
         "docker", "run", "--rm",
-        "-e", f"SONAR_HOST_URL={host_url}",
+        "-e", f"SONAR_HOST_URL={_docker_reachable_url(sonar_url)}",
         "-e", f"SONAR_TOKEN={sonar_token}",
         "-v", f"{project_dir}:/usr/src",
         "sonarsource/sonar-scanner-cli",
@@ -233,3 +237,18 @@ def _build_scanner_cmd(project_dir: str, project_key: str,
         "target/site/jacoco/jacoco.xml",
         "-Dsonar.sourceEncoding=UTF-8",
     ]
+    if extra_args:
+        cmd.extend(extra_args)
+    return cmd
+
+
+def _docker_reachable_url(sonar_url: str) -> str:
+    """Map localhost URLs to an address reachable from inside the
+    scanner container; pass remote URLs through unchanged."""
+    if "localhost" not in sonar_url and "127.0.0.1" not in sonar_url:
+        return sonar_url
+    import platform
+    host = ("host.docker.internal" if platform.system() == "Darwin"
+            else "172.17.0.1")
+    return (sonar_url.replace("localhost", host)
+            .replace("127.0.0.1", host))

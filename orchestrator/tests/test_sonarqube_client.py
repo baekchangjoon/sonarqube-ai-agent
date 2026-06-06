@@ -1,6 +1,8 @@
 import pytest
 
-from src.sonarqube_client import SonarIssue, SonarQubeClient
+from src.sonarqube_client import (
+    SonarIssue, SonarQubeClient, _build_scanner_cmd, _docker_reachable_url,
+)
 from src.config import SonarQubeConfig
 
 
@@ -57,6 +59,34 @@ class TestSonarQubeClientUnit:
         )
         client = SonarQubeClient(config)
         assert client.is_healthy() is False
+
+
+class TestScannerCommand:
+
+    def test_remote_url_passes_through(self):
+        assert (_docker_reachable_url("https://sonar.example.com")
+                == "https://sonar.example.com")
+
+    def test_localhost_is_mapped_for_docker(self):
+        mapped = _docker_reachable_url("http://localhost:9000")
+        assert "localhost" not in mapped
+        assert mapped.endswith(":9000")
+
+    def test_extra_args_appended(self):
+        cmd = _build_scanner_cmd(
+            project_dir="/tmp/p", project_key="k",
+            sonar_url="https://sonar.example.com", sonar_token="t",
+            extra_args=["-Dsonar.pullrequest.key=7"],
+        )
+        assert cmd[-1] == "-Dsonar.pullrequest.key=7"
+        assert "SONAR_HOST_URL=https://sonar.example.com" in cmd
+
+    def test_no_extra_args(self):
+        cmd = _build_scanner_cmd(
+            project_dir="/tmp/p", project_key="k",
+            sonar_url="https://sonar.example.com", sonar_token="t",
+        )
+        assert cmd[-1] == "-Dsonar.sourceEncoding=UTF-8"
 
 
 @pytest.mark.integration
