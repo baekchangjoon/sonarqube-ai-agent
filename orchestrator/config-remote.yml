@@ -1,0 +1,45 @@
+# Remote SonarQube (CE + community branch/PR plugin) — native PR mode
+agent:
+  type: "claude-code"
+
+  claude:
+    allowed_tools: "Read,Write,Edit"
+    model: "sonnet"
+
+sonarqube:
+  url: "https://sonar.dev-temp-mail.com"
+  token: "${SONAR_TOKEN}"
+  main_project_key: "my-project"
+
+scanner:
+  ephemeral_key_pattern: "{project}-pr-{pr_number}"
+  pr_mode: "native"
+  rebuild_command: >-
+    docker run --rm -v "$(pwd)":/project -w /project
+    maven:3.9-eclipse-temurin-17 mvn -q clean compile test-compile
+
+assessment:
+  strategy: "triage"   # C안; D안 비교 실행은 config-remote-review.yml
+
+modes:
+  pr_premerge:
+    enabled: true
+    delivery: "log"          # no real GitHub PR in this test setup
+    max_issues_per_run: 3
+    push_fix_commit: false   # workspace is not a git checkout
+
+  post_merge:
+    enabled: true
+    max_issues_per_run: 2
+
+  nightly_batch:
+    enabled: true
+    max_issues_per_run: 2
+    severity_filter:
+      - "BLOCKER"
+      - "CRITICAL"
+      - "MAJOR"
+    create_fix_pr: false
+    fix_pr:
+      repo: ""
+      base: "main"

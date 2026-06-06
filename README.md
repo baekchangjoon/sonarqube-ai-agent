@@ -21,7 +21,7 @@ LLM-agnostic AI Agent Orchestrator for automated SonarQube defect remediation.
 | Agent | Install | Auth | Verified Version |
 |-------|---------|------|-----------------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `npm i -g @anthropic-ai/claude-code` | `claude` (interactive first run) | >= 2.1.x |
-| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `npm i -g @anthropic-ai/gemini-cli` | `gemini` (interactive first run) | >= 0.30.x |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `npm i -g @google/gemini-cli` | `gemini` (interactive first run) | >= 0.30.x |
 | [Cursor Agent](https://docs.cursor.com/agent) | Bundled with Cursor IDE | Cursor login | >= 2026.03.x |
 
 ## Architecture
@@ -54,17 +54,19 @@ sonarqube-ai-agent/
 │   └── 99-teardown.sh             Stop everything
 │
 ├── orchestrator/  ──────── Python AI Agent Orchestrator
-│   ├── config.yml                 Agent type, SonarQube, scanner, mode settings
+│   ├── config.yml                 Agent, SonarQube, scanner (pr_mode),
+│   │                              assessment strategy, mode settings
 │   ├── requirements.txt           Python dependencies
 │   ├── pytest.ini                 Test runner config
 │   ├── src/
 │   │   ├── config.py              YAML config loader with ${ENV} resolution
-│   │   ├── sonarqube_client.py    SonarQube REST API client
-│   │   ├── github_client.py       GitHub PR comment/creation via gh CLI
+│   │   ├── sonarqube_client.py    SonarQube REST API client + scanner runner
+│   │   ├── github_client.py       PR comment / fix commit / Fix PR via gh CLI
 │   │   ├── orchestrator.py        3-mode workflow engine
+│   │   │                          (scan → assess → fix → verify → deliver)
 │   │   ├── main.py                CLI entry point (4 subcommands)
 │   │   └── agents/
-│   │       ├── base.py            LLMAgent ABC + FixResult dataclass
+│   │       ├── base.py            LLMAgent ABC + fix/triage/review prompts
 │   │       ├── factory.py         Config-driven agent instantiation
 │   │       ├── claude_code.py     Claude Code  (-p --permission-mode acceptEdits)
 │   │       ├── gemini_cli.py      Gemini CLI   (--yolo -p)
@@ -113,23 +115,40 @@ python -m src.main summary
 ### Step 3 — Run Modes
 
 ```bash
-# Mode 1: PR Pre-merge — ephemeral project scan + AI fix
+# Mode 1: PR Pre-merge — PR scan + AI fix + verification + PR comment
+# (--pr-branch / --pr-base are used by scanner.pr_mode: native)
 python -m src.main pr-premerge \
   --repo owner/repo \
   --pr-number 42 \
   --project-dir /path/to/checkout \
+  --pr-branch feature/my-change \
+  --pr-base main \
   --cleanup
 
-# Mode 2: Post-merge — scan main branch + generate fixes
+# Mode 2: Post-merge — scan main, fix new issues, optional Fix PR
 python -m src.main post-merge \
   --project-dir /path/to/project
 
-# Mode 3: Nightly batch — tech debt reduction
+# Mode 3: Nightly batch — tech debt reduction, optional Fix PR
 python -m src.main nightly-batch \
   --project-dir /path/to/project
 
 # Utility: Show project quality summary
 python -m src.main summary --project-key sonarqube-agent-test
+```
+
+Each mode prints a JSON result:
+
+```json
+{
+  "mode": "pr_premerge",
+  "project_key": "my-project",
+  "issues_found": 3,
+  "issues_skipped_as_fp": 1,
+  "fixes_attempted": 2,
+  "fixes_verified": 2,
+  "quality_gate": "ERROR"
+}
 ```
 
 ### Cleanup
@@ -138,6 +157,64 @@ python -m src.main summary --project-key sonarqube-agent-test
 ./scripts/99-teardown.sh          # stop containers (keep data)
 ./scripts/99-teardown.sh --clean  # stop + delete all data
 ```
+
+## Fix Pipeline
+
+All three modes share the same core pipeline:
+
+```
+scan → issues → FP assessment → LLM fix (in place) → rebuild + re-scan → verified fixes → deliver
+```
+
+1. **Scan** — sonar-scanner via Docker. Mode 1 supports two PR analysis
+   strategies (`scanner.pr_mode`):
+   - `ephemeral` — temp project per PR (CE workaround, no plugin needed)
+   - `native` — `sonar.pullrequest.*` params (requires the community
+     branch/PR plugin); the PR slot shows only issues new vs. the base
+2. **FP assessment** (`assessment.strategy`) — mitigates static-analysis
+   false positives before code is touched:
+   - `none` — fix every issue
+   - `triage` — a read-only LLM call judges each issue first;
+     FALSE_POSITIVE → skip + report with confidence
+   - `review` — the fix prompt has an FP escape hatch; afterwards an
+     **independent** LLM call reviews the applied diff (or the FP claim)
+     and provides the confidence, avoiding self-assessment bias.
+     Unparseable/failed judgments fall back to "fix it" (the safe default).
+3. **Fix** — the agent CLI edits files in the working dir directly
+   (`claude -p --permission-mode acceptEdits`, `gemini --yolo`, ...).
+   Issues are processed sequentially so later fixes see earlier ones.
+4. **Verify** — rebuild (`scanner.rebuild_command`), re-scan, then count
+   a fix as verified **only if its issue key is no longer open** on the
+   server. LLM self-reporting is never trusted for verification.
+5. **Deliver** — verified fixes only:
+   - Mode 1: PR comment (`delivery: comment`) and/or a new commit pushed
+     to the PR branch (`push_fix_commit: true`)
+   - Mode 2/3: a Fix PR (`create_fix_pr: true` + `fix_pr.repo`)
+
+Reports, commit messages, and Fix PR bodies include per-fix and per-skip
+confidences, labelled `LLM-assessed` (uncalibrated — treat as a triage
+priority signal, not a probability).
+
+## Configuration Reference (config.yml)
+
+| Key | Values | Description |
+|-----|--------|-------------|
+| `agent.type` | `claude-code` `gemini-cli` `kiro-cli` `bedrock-api` | LLM agent backend (`bedrock-api` is suggestion-only — it cannot edit files) |
+| `sonarqube.url` / `token` | `${ENV}` supported | SonarQube server + auth |
+| `sonarqube.main_project_key` | string | Main branch project |
+| `scanner.pr_mode` | `ephemeral` / `native` | PR analysis strategy (Mode 1) |
+| `scanner.rebuild_command` | shell string | Run in project dir before each scan (empty = skip) |
+| `assessment.strategy` | `none` / `triage` / `review` | False-positive screening (see Fix Pipeline) |
+| `modes.pr_premerge.delivery` | `comment` / `log` | Post analysis report to the PR or log only |
+| `modes.pr_premerge.push_fix_commit` | bool | Push verified fixes as a commit to the PR branch |
+| `modes.*.max_issues_per_run` | int | Cap per run, `0` = unlimited |
+| `modes.post_merge.create_fix_pr` | bool + `fix_pr.repo`/`base` | Open a Fix PR with verified fixes |
+| `modes.nightly_batch.create_fix_pr` | bool + `fix_pr.repo`/`base` | Same for nightly batch |
+| `modes.nightly_batch.severity_filter` | list | Issue severities to select |
+
+Git prerequisites: `push_fix_commit` needs `--project-dir` to be a git
+checkout of the PR branch; `create_fix_pr` needs a git clone with an
+authenticated `origin` and the `gh` CLI.
 
 ## Environment Variables
 
