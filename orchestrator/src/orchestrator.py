@@ -27,6 +27,10 @@ class ModeResult:
     fixes_verified: int
     quality_gate: str
     issues_skipped_as_fp: int = 0
+    llm_input_tokens: int = 0
+    llm_output_tokens: int = 0
+    # None when any backend in the run cannot report its cost
+    llm_cost_usd: float = None
 
 
 class SonarQubeOrchestrator:
@@ -311,7 +315,7 @@ class SonarQubeOrchestrator:
         prompt = self._judge.build_triage_prompt(
             issue_rule=issue.rule, issue_message=issue.message,
             file_path=issue.file_path, line=issue.line,
-            source_context=self._get_source_context(issue),
+            source_context=self._get_source_context(issue, working_dir),
         )
         try:
             raw = self._judge.generate_triage(prompt, working_dir)
@@ -348,7 +352,7 @@ class SonarQubeOrchestrator:
         return fixes, skipped
 
     def _fix_or_escape(self, issue: SonarIssue, working_dir: str):
-        source_context = self._get_source_context(issue)
+        source_context = self._get_source_context(issue, working_dir)
         prompt = self._agent.build_fix_or_escape_prompt(
             issue_rule=issue.rule, issue_message=issue.message,
             file_path=issue.file_path, line=issue.line,
@@ -445,7 +449,7 @@ class SonarQubeOrchestrator:
 
     def _generate_single_fix(self, issue: SonarIssue,
                              working_dir: str) -> FixResult:
-        source_context = self._get_source_context(issue)
+        source_context = self._get_source_context(issue, working_dir)
         prompt = self._agent.build_fix_prompt(
             issue_rule=issue.rule, issue_message=issue.message,
             file_path=issue.file_path, line=issue.line,
@@ -453,11 +457,18 @@ class SonarQubeOrchestrator:
         )
         return self._invoke_agent(prompt, issue, source_context, working_dir)
 
-    def _get_source_context(self, issue: SonarIssue) -> str:
+    def _get_source_context(self, issue: SonarIssue,
+                            working_dir: str) -> str:
         lines = self._sonar.get_source_lines(
             issue.component, max(1, issue.line - 5), issue.line + 5,
         )
-        return "\n".join(lines) if lines else ""
+        if lines:
+            return "\n".join(lines)
+        # SonarQube cannot serve sources for files new in a PR — fall
+        # back to the local checkout so harness-less judges (bedrock-api)
+        # still see the code.
+        return _local_source_context(working_dir, issue.file_path,
+                                     issue.line)
 
     def _invoke_agent(self, prompt: str, issue: SonarIssue,
                       source_context: str, working_dir: str) -> FixResult:
@@ -520,6 +531,7 @@ class SonarQubeOrchestrator:
             sonar_url=self._config.sonarqube.url,
             fix_summary=_summarize_fixes(verified),
             fp_summary=_summarize_fp_skips(skipped),
+            usage_summary=self._usage_summary(),
         )
         if self._config.pr_premerge.delivery == "comment" and repo:
             if self._github.comment_on_pr(repo, pr_number, comment):
@@ -557,6 +569,7 @@ class SonarQubeOrchestrator:
         fp_summary = _summarize_fp_skips(skipped)
         if fp_summary:
             body += f"\n\n### False Positive Screening\n\n{fp_summary}"
+        body += f"\n\n### LLM Usage\n\n{self._usage_summary()}"
         return self._github.create_fix_pr(
             repo=repo, branch=branch, base=base, title=title, body=body,
         )
@@ -574,15 +587,66 @@ class SonarQubeOrchestrator:
         return ModeResult(mode, self._config.sonarqube.main_project_key,
                           0, 0, 0, "DISABLED")
 
-    @staticmethod
-    def _build_result(mode, key, issues, fixes, verified, gate,
+    def _build_result(self, mode, key, issues, fixes, verified, gate,
                       skipped=None):
+        usage = self._collect_usage()
         return ModeResult(
             mode=mode, project_key=key,
             issues_found=len(issues), fixes_attempted=len(fixes),
             fixes_verified=len(verified), quality_gate=gate,
             issues_skipped_as_fp=len(skipped or []),
+            llm_input_tokens=usage["input_tokens"],
+            llm_output_tokens=usage["output_tokens"],
+            llm_cost_usd=usage["cost_usd"],
         )
+
+    def _agents_in_run(self):
+        agents = [("fixer", self._agent)]
+        if self._judge is not self._agent:
+            agents.append(("judge", self._judge))
+        return agents
+
+    def _collect_usage(self) -> dict:
+        total = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+        for _, agent in self._agents_in_run():
+            usage = agent.get_usage()
+            total["input_tokens"] += usage["input_tokens"]
+            total["output_tokens"] += usage["output_tokens"]
+            if usage["cost_usd"] is None:
+                total["cost_usd"] = None  # unknown component → no total
+            elif total["cost_usd"] is not None:
+                total["cost_usd"] += usage["cost_usd"]
+        return total
+
+    def _usage_summary(self) -> str:
+        lines = []
+        for role, agent in self._agents_in_run():
+            u = agent.get_usage()
+            cost = f"${u['cost_usd']:.4f}" if u["cost_usd"] is not None \
+                else "cost n/a"
+            lines.append(
+                f"- {role} ({agent.name()}): "
+                f"{u['input_tokens']:,} in / {u['output_tokens']:,} out "
+                f"— {cost}"
+            )
+        total = self._collect_usage()
+        total_cost = f"${total['cost_usd']:.4f}" \
+            if total["cost_usd"] is not None else "n/a"
+        lines.append(f"- **total: {total_cost}** "
+                     f"({total['input_tokens']:,} in / "
+                     f"{total['output_tokens']:,} out)")
+        return "\n".join(lines)
+
+
+def _local_source_context(working_dir: str, file_path: str,
+                          line: int) -> str:
+    try:
+        text = (Path(working_dir) / file_path).read_text()
+    except OSError:
+        return ""
+    lines = text.splitlines()
+    start = max(0, line - 6)
+    return "\n".join(lines[start:line + 5])
 
 
 def _limit(issues: list, max_issues: int) -> list:

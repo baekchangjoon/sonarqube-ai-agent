@@ -110,7 +110,10 @@ class TestBedrockConverse:
         kwargs = mock_client.converse.call_args[1]
         assert kwargs["modelId"] == "global.amazon.nova-2-lite-v1:0"
         assert kwargs["messages"][0]["content"][0]["text"] == "judge this"
-        assert agent.usage == {"input_tokens": 120, "output_tokens": 15}
+        assert agent.usage["input_tokens"] == 120
+        assert agent.usage["output_tokens"] == 15
+        # nova-2-lite: 120*0.30/1M + 15*2.50/1M
+        assert agent.usage["cost_usd"] == pytest.approx(0.0000735)
 
     def test_converse_error_returns_empty(self):
         from unittest.mock import MagicMock
@@ -120,6 +123,54 @@ class TestBedrockConverse:
         agent._client = mock_client
 
         assert agent.generate_fix("p", "/tmp") == ""
+
+
+class TestPricing:
+
+    def test_known_models(self):
+        from src.agents.pricing import estimate_cost
+        # 1M in + 1M out
+        assert estimate_cost("global.anthropic.claude-sonnet-4-6",
+                             1_000_000, 1_000_000) == 18.00
+        assert estimate_cost("global.amazon.nova-2-lite-v1:0",
+                             1_000_000, 1_000_000) == 2.80
+        assert estimate_cost("global.anthropic.claude-opus-4-6-v1",
+                             1_000_000, 0) == 5.00
+
+    def test_unknown_model_returns_none(self):
+        from src.agents.pricing import estimate_cost
+        assert estimate_cost("mistral.mistral-large", 1000, 1000) is None
+
+
+class TestClaudeCliJsonParsing:
+
+    def test_parses_result_and_usage(self):
+        agent = ClaudeCodeAgent()
+        stdout = (
+            '{"type": "result", "result": "fixed it", '
+            '"total_cost_usd": 0.0312, '
+            '"usage": {"input_tokens": 10, '
+            '"cache_creation_input_tokens": 500, '
+            '"cache_read_input_tokens": 200, "output_tokens": 42}}'
+        )
+        text = agent._parse_cli_json(stdout)
+        assert text == "fixed it"
+        assert agent.usage == {"input_tokens": 710, "output_tokens": 42,
+                               "cost_usd": 0.0312}
+
+    def test_usage_accumulates_across_calls(self):
+        agent = ClaudeCodeAgent()
+        stdout = ('{"result": "a", "total_cost_usd": 0.01, '
+                  '"usage": {"input_tokens": 100, "output_tokens": 10}}')
+        agent._parse_cli_json(stdout)
+        agent._parse_cli_json(stdout)
+        assert agent.usage["input_tokens"] == 200
+        assert abs(agent.usage["cost_usd"] - 0.02) < 1e-9
+
+    def test_non_json_falls_back_to_raw(self):
+        agent = ClaudeCodeAgent()
+        assert agent._parse_cli_json("plain text") == "plain text"
+        assert agent.usage["cost_usd"] == 0.0
 
 
 class TestFixResult:

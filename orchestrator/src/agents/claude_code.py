@@ -1,3 +1,4 @@
+import json
 import logging
 import subprocess
 
@@ -11,7 +12,10 @@ class ClaudeCodeAgent(LLMAgent):
 
     Requires: claude CLI >= 2.1.x with valid authentication.
     Flags: -p (print/headless), --permission-mode acceptEdits,
+           --output-format json (for usage/cost reporting),
            stdin redirected from /dev/null to avoid 3s stdin wait.
+    Works against the Anthropic API or AWS Bedrock
+    (CLAUDE_CODE_USE_BEDROCK=1).
     Reference: https://docs.anthropic.com/en/docs/claude-code
     """
 
@@ -19,6 +23,8 @@ class ClaudeCodeAgent(LLMAgent):
                  model: str = "sonnet"):
         self._allowed_tools = allowed_tools
         self._model = model
+        self.usage = {"input_tokens": 0, "output_tokens": 0,
+                      "cost_usd": 0.0}
 
     def generate_fix(self, prompt: str,
                      working_dir: str) -> str:
@@ -30,6 +36,7 @@ class ClaudeCodeAgent(LLMAgent):
                         working_dir: str) -> str:
         cmd = [
             "claude", "-p",
+            "--output-format", "json",
             "--allowedTools", "Read",  # judgment only — no edits
             "--model", self._model,
             prompt,
@@ -40,6 +47,7 @@ class ClaudeCodeAgent(LLMAgent):
     def _build_cmd(self, prompt: str) -> list[str]:
         return [
             "claude", "-p",
+            "--output-format", "json",
             "--permission-mode", "acceptEdits",
             "--allowedTools", self._allowed_tools,
             "--model", self._model,
@@ -54,7 +62,24 @@ class ClaudeCodeAgent(LLMAgent):
         if result.returncode != 0:
             logger.error("Claude Code failed: %s", result.stderr[-300:])
             return ""
-        return result.stdout
+        return self._parse_cli_json(result.stdout)
+
+    def _parse_cli_json(self, stdout: str) -> str:
+        """Extract the response text and record usage from the CLI's
+        JSON envelope; fall back to raw stdout if it isn't JSON."""
+        try:
+            data = json.loads(stdout)
+        except ValueError:
+            return stdout
+        usage = data.get("usage", {})
+        self.usage["input_tokens"] += (
+            usage.get("input_tokens", 0)
+            + usage.get("cache_creation_input_tokens", 0)
+            + usage.get("cache_read_input_tokens", 0)
+        )
+        self.usage["output_tokens"] += usage.get("output_tokens", 0)
+        self.usage["cost_usd"] += data.get("total_cost_usd", 0.0) or 0.0
+        return data.get("result", "") or ""
 
     def supports_mcp(self) -> bool:
         return True

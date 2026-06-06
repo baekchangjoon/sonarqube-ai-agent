@@ -132,6 +132,9 @@ def _print_result(result) -> None:
         "fixes_attempted": result.fixes_attempted,
         "fixes_verified": result.fixes_verified,
         "quality_gate": result.quality_gate,
+        "llm_input_tokens": result.llm_input_tokens,
+        "llm_output_tokens": result.llm_output_tokens,
+        "llm_cost_usd": result.llm_cost_usd,
     }
     print(json.dumps(output, indent=2, ensure_ascii=False))
 

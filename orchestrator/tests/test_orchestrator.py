@@ -45,6 +45,9 @@ def _make_orchestrator(config=None):
         mock_agent.name.return_value = "Mock Agent"
         mock_agent.generate_fix.return_value = "fixed code"
         mock_agent.build_fix_prompt.return_value = "prompt"
+        mock_agent.get_usage.return_value = {
+            "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0,
+        }
         mock_factory.create.return_value = mock_agent
         orch = SonarQubeOrchestrator(config or _make_config())
     orch._sonar = MagicMock()
@@ -67,6 +70,10 @@ class TestJudgeAgentRouting:
         judge.generate_triage.return_value = (
             '{"verdict": "TRUE_POSITIVE", "confidence": 0.9, "reason": "r"}'
         )
+        for m in (fixer, judge):
+            m.get_usage.return_value = {
+                "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0,
+            }
         with patch("src.orchestrator.AgentFactory") as mock_factory:
             mock_factory.create.side_effect = [fixer, judge]
             orch = SonarQubeOrchestrator(config)
@@ -757,6 +764,113 @@ class TestPostReview:
 
         # the edit happened, so it is treated as a fix and reviewed
         assert len(fixes) == 1 and not skipped
+
+
+@patch("src.orchestrator.time.sleep")
+class TestUsageReporting:
+
+    def _usage_orch(self, judge_usage=None):
+        config = _make_config(
+            agent=AgentConfig(type="claude-code",
+                              judge_type="bedrock-api"),
+        )
+        fixer, judge = MagicMock(), MagicMock()
+        fixer.name.return_value = "Claude Code (sonnet)"
+        judge.name.return_value = "Bedrock Converse (nova)"
+        fixer.generate_fix.return_value = "fixed"
+        fixer.get_usage.return_value = {
+            "input_tokens": 1000, "output_tokens": 100, "cost_usd": 0.05,
+        }
+        judge.get_usage.return_value = judge_usage or {
+            "input_tokens": 500, "output_tokens": 50, "cost_usd": 0.001,
+        }
+        with patch("src.orchestrator.AgentFactory") as mock_factory:
+            mock_factory.create.side_effect = [fixer, judge]
+            orch = SonarQubeOrchestrator(config)
+        orch._sonar = MagicMock()
+        orch._github = MagicMock()
+        return orch
+
+    def test_result_aggregates_fixer_and_judge_usage(self, _sleep):
+        orch = self._usage_orch()
+        orch._sonar.get_new_issues.return_value = []
+        orch._sonar.get_quality_gate_status.return_value = "OK"
+
+        usage = orch._collect_usage()
+        assert usage["input_tokens"] == 1500
+        assert usage["output_tokens"] == 150
+        assert usage["cost_usd"] == pytest.approx(0.051)
+
+    def test_unknown_component_cost_makes_total_none(self, _sleep):
+        orch = self._usage_orch(judge_usage={
+            "input_tokens": 500, "output_tokens": 50, "cost_usd": None,
+        })
+        usage = orch._collect_usage()
+        assert usage["cost_usd"] is None
+        assert usage["input_tokens"] == 1500
+
+    def test_usage_summary_lists_roles_and_total(self, _sleep):
+        orch = self._usage_orch()
+        summary = orch._usage_summary()
+        assert "fixer (Claude Code (sonnet))" in summary
+        assert "judge (Bedrock Converse (nova))" in summary
+        assert "$0.0510" in summary
+        assert "1,500 in / 150 out" in summary
+
+    def test_mode_result_carries_usage(self, _sleep):
+        orch = self._usage_orch()
+        orch._sonar.run_scanner.return_value = True
+        orch._sonar.get_open_issues.side_effect = [[_make_issue("K1")], []]
+        orch._sonar.get_quality_gate_status.return_value = "ERROR"
+        orch._sonar.get_source_lines.return_value = ["line"]
+        orch._judge.generate_triage.return_value = (
+            '{"verdict": "TRUE_POSITIVE", "confidence": 0.9, "reason": "r"}'
+        )
+
+        result = orch.handle_pr_premerge("o/r", 1, "/tmp/proj")
+
+        assert result.llm_input_tokens == 1500
+        assert result.llm_output_tokens == 150
+        assert result.llm_cost_usd == pytest.approx(0.051)
+
+    def test_same_agent_not_double_counted(self, _sleep):
+        orch = _make_orchestrator()  # judge is the fix agent
+        orch._agent.get_usage.return_value = {
+            "input_tokens": 100, "output_tokens": 10, "cost_usd": 0.01,
+        }
+        usage = orch._collect_usage()
+        assert usage["input_tokens"] == 100
+
+
+class TestSourceContextFallback:
+
+    def test_falls_back_to_local_file_when_sonar_has_no_source(
+            self, tmp_path):
+        orch = _make_orchestrator()
+        orch._sonar.get_source_lines.return_value = []  # new file in PR
+        target = tmp_path / "src/main/java/Foo.java"
+        target.parent.mkdir(parents=True)
+        target.write_text("\n".join(f"line{i}" for i in range(1, 21)))
+
+        context = orch._get_source_context(_make_issue(line=10),
+                                           str(tmp_path))
+
+        assert "line5" in context and "line15" in context
+        assert "line1\n" not in context  # window, not whole file
+
+    def test_sonar_source_takes_precedence(self, tmp_path):
+        orch = _make_orchestrator()
+        orch._sonar.get_source_lines.return_value = ["from sonar"]
+
+        context = orch._get_source_context(_make_issue(), str(tmp_path))
+
+        assert context == "from sonar"
+
+    def test_missing_local_file_returns_empty(self, tmp_path):
+        orch = _make_orchestrator()
+        orch._sonar.get_source_lines.return_value = []
+
+        assert orch._get_source_context(_make_issue(), str(tmp_path)) == ""
 
 
 class TestOrchestratorSummary:

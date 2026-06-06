@@ -101,11 +101,13 @@ class GitHubClient:
                               project_key: str,
                               sonar_url: str,
                               fix_summary: str = "",
-                              fp_summary: str = "") -> str:
+                              fp_summary: str = "",
+                              usage_summary: str = "") -> str:
         header = _build_comment_header(len(issues))
         table_rows = _build_issue_rows(issues, sonar_url)
         footer = _build_comment_footer(
-            issues, project_key, sonar_url, fix_summary, fp_summary
+            issues, project_key, sonar_url, fix_summary, fp_summary,
+            usage_summary,
         )
         return "\n".join(header + table_rows + footer)
 
@@ -148,7 +150,8 @@ def _build_issue_rows(issues: list[SonarIssue],
 
 def _build_comment_footer(issues: list[SonarIssue], project_key: str,
                           sonar_url: str, fix_summary: str,
-                          fp_summary: str = "") -> list[str]:
+                          fp_summary: str = "",
+                          usage_summary: str = "") -> list[str]:
     lines = [
         "",
         f"[View in SonarQube]({sonar_url}/project/issues?id={project_key})",
@@ -158,4 +161,6 @@ def _build_comment_footer(issues: list[SonarIssue], project_key: str,
     if fp_summary:
         lines.extend(["", "---", "",
                       "### False Positive Screening", "", fp_summary])
+    if usage_summary:
+        lines.extend(["", "---", "", "### LLM Usage", "", usage_summary])
     return lines

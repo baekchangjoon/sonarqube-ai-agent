@@ -1,6 +1,7 @@
 import logging
 
 from src.agents.base import LLMAgent
+from src.agents.pricing import estimate_cost
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,8 @@ class BedrockAPIAgent(LLMAgent):
         self._model_id = model_id
         self._region = region
         self._client = None
-        self.usage = {"input_tokens": 0, "output_tokens": 0}
+        self.usage = {"input_tokens": 0, "output_tokens": 0,
+                      "cost_usd": None}
 
     def _get_client(self):
         if self._client is None:
@@ -47,6 +49,10 @@ class BedrockAPIAgent(LLMAgent):
     def _record_usage(self, usage: dict) -> None:
         self.usage["input_tokens"] += usage.get("inputTokens", 0)
         self.usage["output_tokens"] += usage.get("outputTokens", 0)
+        cost = estimate_cost(self._model_id,
+                             self.usage["input_tokens"],
+                             self.usage["output_tokens"])
+        self.usage["cost_usd"] = cost  # None when model not in price table
 
     def supports_mcp(self) -> bool:
         return False

@@ -66,6 +66,14 @@ class LLMAgent(ABC):
     def name(self) -> str:
         """Human-readable agent name for logging."""
 
+    def get_usage(self) -> dict:
+        """Cumulative token usage and cost for this agent instance.
+
+        cost_usd is None when the backend cannot determine it."""
+        return getattr(self, "usage", {
+            "input_tokens": 0, "output_tokens": 0, "cost_usd": None,
+        })
+
     def build_fix_prompt(self, issue_rule: str, issue_message: str,
                          file_path: str, line: int,
                          source_context: str) -> str:
