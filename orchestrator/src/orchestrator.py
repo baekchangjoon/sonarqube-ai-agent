@@ -1,9 +1,11 @@
+import json
 import logging
+import re
 import subprocess
 import time
 from dataclasses import dataclass
 
-from src.agents.base import FixResult, LLMAgent
+from src.agents.base import FixResult, LLMAgent, TriageResult
 from src.agents.factory import AgentFactory
 from src.config import AppConfig
 from src.github_client import GitHubClient
@@ -22,6 +24,7 @@ class ModeResult:
     fixes_attempted: int
     fixes_verified: int
     quality_gate: str
+    issues_skipped_as_fp: int = 0
 
 
 class SonarQubeOrchestrator:
@@ -87,14 +90,14 @@ class SonarQubeOrchestrator:
         logger.info("Scan result: %d issues, gate=%s", len(issues), gate)
         issues = _limit(issues, self._config.pr_premerge.max_issues_per_run)
 
-        fixes, verified = self._fix_and_verify(
+        fixes, verified, skipped = self._fix_and_verify(
             issues, project_dir, ephemeral_key, scan_project_name=pr_name,
         )
         self._push_pr_fix_commit(project_dir, pr_number, verified)
         self._deliver_pr_comment(repo, pr_number, issues,
-                                 ephemeral_key, verified)
+                                 ephemeral_key, verified, skipped)
         return self._build_result("pr_premerge", ephemeral_key,
-                                  issues, fixes, verified, gate)
+                                  issues, fixes, verified, gate, skipped)
 
     def _pr_premerge_native(self, repo: str, pr_number: int,
                             project_dir: str, pr_branch: str,
@@ -119,14 +122,15 @@ class SonarQubeOrchestrator:
         logger.info("Scan result: %d issues, gate=%s", len(issues), gate)
         issues = _limit(issues, self._config.pr_premerge.max_issues_per_run)
 
-        fixes, verified = self._fix_and_verify(
+        fixes, verified, skipped = self._fix_and_verify(
             issues, project_dir, main_key,
             pull_request=pr_key, scan_extra_args=extra_args,
         )
         self._push_pr_fix_commit(project_dir, pr_number, verified)
-        self._deliver_pr_comment(repo, pr_number, issues, main_key, verified)
+        self._deliver_pr_comment(repo, pr_number, issues, main_key,
+                                 verified, skipped)
         return self._build_result("pr_premerge", main_key,
-                                  issues, fixes, verified, gate)
+                                  issues, fixes, verified, gate, skipped)
 
     def cleanup_pr_project(self, pr_number: int) -> bool:
         if self._config.scanner.pr_mode == "native":
@@ -154,16 +158,16 @@ class SonarQubeOrchestrator:
             return ModeResult("post_merge", main_key, 0, 0, 0, gate)
         issues = _limit(issues, pm_cfg.max_issues_per_run)
 
-        fixes, verified = self._fix_with_optional_verify(
+        fixes, verified, skipped = self._fix_with_optional_verify(
             issues, project_dir, main_key,
         )
         if pm_cfg.create_fix_pr and verified:
             self._create_fix_pr_from_fixes(
-                project_dir, verified, pm_cfg.fix_pr_repo,
+                project_dir, verified, skipped, pm_cfg.fix_pr_repo,
                 pm_cfg.fix_pr_base, "post-merge",
             )
         return self._build_result("post_merge", main_key,
-                                  issues, fixes, verified, gate)
+                                  issues, fixes, verified, gate, skipped)
 
     # ── Mode 3: Nightly Batch ───────────────
 
@@ -188,16 +192,16 @@ class SonarQubeOrchestrator:
         if not issues:
             return ModeResult("nightly_batch", main_key, 0, 0, 0, gate)
 
-        fixes, verified = self._fix_with_optional_verify(
+        fixes, verified, skipped = self._fix_with_optional_verify(
             issues, project_dir, main_key,
         )
         if batch_cfg.create_fix_pr and verified:
             self._create_fix_pr_from_fixes(
-                project_dir, verified, batch_cfg.fix_pr_repo,
+                project_dir, verified, skipped, batch_cfg.fix_pr_repo,
                 batch_cfg.fix_pr_base, "nightly",
             )
         return self._build_result("nightly_batch", main_key,
-                                  issues, fixes, verified, gate)
+                                  issues, fixes, verified, gate, skipped)
 
     # ── Reporting ───────────────────────────
 
@@ -227,17 +231,17 @@ class SonarQubeOrchestrator:
                         project_key: str, pull_request: str = None,
                         scan_extra_args: list = None,
                         scan_project_name: str = None):
-        """Run fixes, then re-scan and count an issue as verified only
-        if it is no longer open."""
-        fixes = self._run_fixes(issues, project_dir)
+        """Triage, run fixes, then re-scan and count an issue as
+        verified only if it is no longer open."""
+        fixes, skipped = self._triage_and_fix(issues, project_dir)
         if not any(f.success for f in fixes):
-            return fixes, []
+            return fixes, [], skipped
 
         if not self._build_and_scan(project_dir, project_key,
                                     project_name=scan_project_name,
                                     extra_args=scan_extra_args):
             logger.warning("Verification re-scan failed — fixes unverified")
-            return fixes, []
+            return fixes, [], skipped
 
         still_open = {
             i.key for i in self._sonar.get_open_issues(
@@ -248,19 +252,64 @@ class SonarQubeOrchestrator:
                     if f.success and f.issue_key not in still_open]
         logger.info("Verification: %d/%d fixes confirmed by re-scan",
                     len(verified), len(fixes))
-        return fixes, verified
+        return fixes, verified, skipped
 
     def _fix_with_optional_verify(self, issues, project_dir, project_key):
         if project_dir:
             return self._fix_and_verify(issues, project_dir, project_key)
         logger.warning("No --project-dir given — fixes cannot be "
                        "applied locally or verified")
-        fixes = self._run_fixes(issues, ".")
-        return fixes, []
+        fixes, skipped = self._triage_and_fix(issues, ".")
+        return fixes, [], skipped
 
-    def _run_fixes(self, issues: list[SonarIssue],
-                   working_dir: str) -> list[FixResult]:
-        return [self._generate_single_fix(i, working_dir) for i in issues]
+    # ── False Positive Triage ───────────────
+
+    def _triage_and_fix(self, issues: list[SonarIssue],
+                        working_dir: str):
+        """Screen each issue with a read-only LLM judgment first.
+        FALSE_POSITIVE verdict → skip the fix and report."""
+        fixes, skipped = [], []
+        for issue in issues:
+            triage = self._triage_issue(issue, working_dir)
+            if triage and triage.verdict == "FALSE_POSITIVE":
+                logger.info(
+                    "FP triage skip: %s %s (confidence=%.2f) — %s",
+                    issue.rule, issue.key, triage.confidence, triage.reason,
+                )
+                skipped.append((issue, triage))
+                continue
+            fixes.append(self._generate_single_fix(issue, working_dir))
+        return fixes, skipped
+
+    def _triage_issue(self, issue: SonarIssue,
+                      working_dir: str) -> TriageResult:
+        if not self._config.triage.enabled:
+            return None
+        prompt = self._agent.build_triage_prompt(
+            issue_rule=issue.rule, issue_message=issue.message,
+            file_path=issue.file_path, line=issue.line,
+            source_context=self._get_source_context(issue),
+        )
+        try:
+            raw = self._agent.generate_triage(prompt, working_dir)
+        except Exception as e:
+            logger.warning("Triage failed for %s: %s — treating as "
+                           "true positive", issue.key, e)
+            return TriageResult("TRUE_POSITIVE", 0.0, f"triage error: {e}")
+
+        data = _extract_json(raw)
+        if (not data
+                or data.get("verdict") not in ("TRUE_POSITIVE",
+                                               "FALSE_POSITIVE")):
+            logger.warning("Unparseable triage for %s — treating as "
+                           "true positive", issue.key)
+            return TriageResult("TRUE_POSITIVE", 0.0,
+                                "unparseable triage response")
+        return TriageResult(
+            verdict=data["verdict"],
+            confidence=_safe_float(data.get("confidence"), 0.0),
+            reason=str(data.get("reason", "")),
+        )
 
     def _generate_single_fix(self, issue: SonarIssue,
                              working_dir: str) -> FixResult:
@@ -290,6 +339,7 @@ class SonarQubeOrchestrator:
                 file_path=issue.file_path, original_code=source_context,
                 fixed_code=raw, test_code="",
                 explanation=f"Fix for {issue.rule}: {issue.message}",
+                fix_confidence=_extract_fix_confidence(raw),
             )
         except Exception as e:
             logger.error("Fix failed for %s: %s", issue.key, str(e))
@@ -331,11 +381,13 @@ class SonarQubeOrchestrator:
     # ── Delivery ────────────────────────────
 
     def _deliver_pr_comment(self, repo: str, pr_number: int,
-                            issues, project_key: str, verified) -> None:
+                            issues, project_key: str, verified,
+                            skipped=None) -> None:
         comment = GitHubClient.format_issues_comment(
             issues=issues, project_key=project_key,
             sonar_url=self._config.sonarqube.url,
             fix_summary=_summarize_fixes(verified),
+            fp_summary=_summarize_fp_skips(skipped),
         )
         if self._config.pr_premerge.delivery == "comment" and repo:
             if self._github.comment_on_pr(repo, pr_number, comment):
@@ -349,12 +401,13 @@ class SonarQubeOrchestrator:
         if not verified or not self._config.pr_premerge.push_fix_commit:
             return
         message = (f"fix: resolve {len(verified)} SonarQube issue(s) "
-                   f"via AI agent (PR #{pr_number})")
+                   f"via AI agent (PR #{pr_number})"
+                   f"{_confidence_note(verified)}")
         if not self._github.commit_and_push(project_dir, message):
             logger.warning("Failed to push fix commit to PR branch")
 
     def _create_fix_pr_from_fixes(self, project_dir: str, verified,
-                                  repo: str, base: str,
+                                  skipped, repo: str, base: str,
                                   label: str) -> str:
         """Mode 2/3: push verified fixes to a new branch and open a PR."""
         if not repo:
@@ -365,11 +418,15 @@ class SonarQubeOrchestrator:
                   f"{time.strftime('%Y%m%d-%H%M%S')}")
         title = (f"fix: resolve {len(verified)} SonarQube issue(s) "
                  f"[{label}]")
-        if not self._github.push_fix_branch(project_dir, branch, title):
+        if not self._github.push_fix_branch(
+                project_dir, branch, title + _confidence_note(verified)):
             return ""
+        body = _summarize_fixes(verified)
+        fp_summary = _summarize_fp_skips(skipped)
+        if fp_summary:
+            body += f"\n\n### False Positive Screening\n\n{fp_summary}"
         return self._github.create_fix_pr(
-            repo=repo, branch=branch, base=base, title=title,
-            body=_summarize_fixes(verified),
+            repo=repo, branch=branch, base=base, title=title, body=body,
         )
 
     # ── Private Helpers ─────────────────────
@@ -386,11 +443,13 @@ class SonarQubeOrchestrator:
                           0, 0, 0, "DISABLED")
 
     @staticmethod
-    def _build_result(mode, key, issues, fixes, verified, gate):
+    def _build_result(mode, key, issues, fixes, verified, gate,
+                      skipped=None):
         return ModeResult(
             mode=mode, project_key=key,
             issues_found=len(issues), fixes_attempted=len(fixes),
             fixes_verified=len(verified), quality_gate=gate,
+            issues_skipped_as_fp=len(skipped or []),
         )
 
 
@@ -412,7 +471,65 @@ def _empty_fix(issue: SonarIssue, source: str, error: str) -> FixResult:
 def _summarize_fixes(fixes: list[FixResult]) -> str:
     if not fixes:
         return "No automated fixes were generated."
-    lines = [f"**{len(fixes)} fix(es)** verified by re-scan:\n"]
+    lines = [f"**{len(fixes)} fix(es)** verified by re-scan "
+             f"(confidence = LLM self-reported):\n"]
     for fix in fixes:
-        lines.append(f"- `{fix.file_path}` — {fix.explanation}")
+        lines.append(f"- `{fix.file_path}` — {fix.explanation} "
+                     f"[fix confidence: {_fmt_confidence(fix.fix_confidence)}]")
     return "\n".join(lines)
+
+
+def _summarize_fp_skips(skipped) -> str:
+    """Report issues the LLM triage judged as false positives."""
+    if not skipped:
+        return ""
+    lines = [f"**{len(skipped)} issue(s)** judged as false positive by "
+             f"LLM triage and skipped (confidence = LLM self-reported, "
+             f"please review):\n"]
+    for issue, triage in skipped:
+        lines.append(
+            f"- `{issue.file_path}:{issue.line}` {issue.rule} — "
+            f"{triage.reason} [confidence: "
+            f"{_fmt_confidence(triage.confidence)}]"
+        )
+    return "\n".join(lines)
+
+
+def _confidence_note(verified) -> str:
+    """Aggregate fix-confidence line for commit messages / PR titles."""
+    confs = [f.fix_confidence for f in verified
+             if f.fix_confidence is not None]
+    if not confs:
+        return ""
+    return (f"\n\nFix confidence (LLM self-reported): "
+            f"avg {sum(confs) / len(confs):.2f}, min {min(confs):.2f}")
+
+
+def _fmt_confidence(value) -> str:
+    return f"{value:.2f}" if value is not None else "n/a"
+
+
+def _extract_fix_confidence(raw: str):
+    data = _extract_json(raw)
+    if data and "fix_confidence" in data:
+        return _safe_float(data["fix_confidence"], None)
+    return None
+
+
+def _extract_json(text) -> dict:
+    """Extract the last parseable JSON object from an LLM response."""
+    if not isinstance(text, str):
+        return None
+    for match in reversed(re.findall(r"\{[^{}]*\}", text)):
+        try:
+            return json.loads(match)
+        except ValueError:
+            continue
+    return None
+
+
+def _safe_float(value, default):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default

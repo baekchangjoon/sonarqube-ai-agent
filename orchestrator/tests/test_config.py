@@ -108,6 +108,18 @@ class TestAppConfig:
         assert config.nightly_batch.create_fix_pr is False
         assert config.nightly_batch.fix_pr_base == "main"
 
+    def test_triage_default_off(self, tmp_path):
+        config_path = tmp_path / "c.yml"
+        config_path.write_text(yaml.dump({}))
+        config = AppConfig.load(str(config_path))
+        assert config.triage.enabled is False
+
+    def test_triage_enabled(self, tmp_path):
+        config_path = tmp_path / "c.yml"
+        config_path.write_text(yaml.dump({"triage": {"enabled": True}}))
+        config = AppConfig.load(str(config_path))
+        assert config.triage.enabled is True
+
     def test_pr_premerge_push_fix_commit(self, tmp_path):
         custom = {
             "modes": {"pr_premerge": {"push_fix_commit": True}},

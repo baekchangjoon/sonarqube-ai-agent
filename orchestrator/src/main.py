@@ -128,6 +128,7 @@ def _print_result(result) -> None:
         "mode": result.mode,
         "project_key": result.project_key,
         "issues_found": result.issues_found,
+        "issues_skipped_as_fp": result.issues_skipped_as_fp,
         "fixes_attempted": result.fixes_attempted,
         "fixes_verified": result.fixes_verified,
         "quality_gate": result.quality_gate,

@@ -30,6 +30,11 @@ scanner:
     docker run --rm -v "$(pwd)":/project -w /project
     maven:3.9-eclipse-temurin-17 mvn -q clean compile test-compile
 
+# LLM false-positive screening before each fix:
+# read-only judgment call; FALSE_POSITIVE → skip fix + report w/ confidence
+triage:
+  enabled: true
+
 modes:
   pr_premerge:
     enabled: true

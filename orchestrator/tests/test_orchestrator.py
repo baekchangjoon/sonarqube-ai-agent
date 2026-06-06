@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 from src.agents.base import AgentType, FixResult
 from src.config import (
     AgentConfig, AppConfig, NightlyBatchConfig, PostMergeConfig,
-    PrPremergeConfig, ScannerConfig, SonarQubeConfig,
+    PrPremergeConfig, ScannerConfig, SonarQubeConfig, TriageConfig,
 )
 from src.github_client import GitHubClient
 from src.orchestrator import SonarQubeOrchestrator
@@ -451,6 +451,120 @@ class TestOrchestratorNightlyBatch:
 
         assert result.quality_gate == "DISABLED"
         orch._sonar.get_open_issues.assert_not_called()
+
+
+@patch("src.orchestrator.time.sleep")
+class TestFpTriage:
+
+    def _triage_orch(self):
+        config = _make_config(
+            triage=TriageConfig(enabled=True),
+            pr_premerge=PrPremergeConfig(delivery="log"),
+        )
+        orch = _make_orchestrator(config)
+        orch._sonar.run_scanner.return_value = True
+        orch._sonar.get_quality_gate_status.return_value = "ERROR"
+        orch._sonar.get_source_lines.return_value = ["line"]
+        return orch
+
+    def test_false_positive_skips_fix(self, _sleep):
+        orch = self._triage_orch()
+        orch._agent.generate_triage.return_value = (
+            '{"verdict": "FALSE_POSITIVE", "confidence": 0.85, '
+            '"reason": "field is used via reflection"}'
+        )
+        orch._sonar.get_open_issues.side_effect = [[_make_issue("K1")]]
+
+        result = orch.handle_pr_premerge("o/r", 1, "/tmp/proj")
+
+        orch._agent.generate_fix.assert_not_called()
+        assert result.issues_skipped_as_fp == 1
+        assert result.fixes_attempted == 0
+        # no fixes → no verification re-scan
+        assert orch._sonar.run_scanner.call_count == 1
+
+    def test_true_positive_proceeds_to_fix(self, _sleep):
+        orch = self._triage_orch()
+        orch._agent.generate_triage.return_value = (
+            '{"verdict": "TRUE_POSITIVE", "confidence": 0.9, '
+            '"reason": "real resource leak"}'
+        )
+        orch._sonar.get_open_issues.side_effect = [[_make_issue("K1")], []]
+
+        result = orch.handle_pr_premerge("o/r", 1, "/tmp/proj")
+
+        orch._agent.generate_fix.assert_called_once()
+        assert result.issues_skipped_as_fp == 0
+        assert result.fixes_verified == 1
+
+    def test_unparseable_triage_falls_back_to_fix(self, _sleep):
+        orch = self._triage_orch()
+        orch._agent.generate_triage.return_value = "I think it is fine."
+        orch._sonar.get_open_issues.side_effect = [[_make_issue("K1")], []]
+
+        result = orch.handle_pr_premerge("o/r", 1, "/tmp/proj")
+
+        orch._agent.generate_fix.assert_called_once()
+        assert result.issues_skipped_as_fp == 0
+
+    def test_triage_disabled_skips_judgment(self, _sleep):
+        orch = _make_orchestrator()  # triage default off
+        orch._sonar.run_scanner.return_value = True
+        orch._sonar.get_open_issues.side_effect = [[_make_issue("K1")], []]
+        orch._sonar.get_quality_gate_status.return_value = "ERROR"
+        orch._sonar.get_source_lines.return_value = ["line"]
+
+        orch.handle_pr_premerge("o/r", 1, "/tmp/proj")
+
+        orch._agent.generate_triage.assert_not_called()
+
+    def test_fp_report_in_pr_comment(self, _sleep):
+        config = _make_config(
+            triage=TriageConfig(enabled=True),
+            pr_premerge=PrPremergeConfig(delivery="comment"),
+        )
+        orch = _make_orchestrator(config)
+        orch._sonar.run_scanner.return_value = True
+        orch._sonar.get_quality_gate_status.return_value = "ERROR"
+        orch._sonar.get_source_lines.return_value = ["line"]
+        orch._agent.generate_triage.return_value = (
+            '{"verdict": "FALSE_POSITIVE", "confidence": 0.72, '
+            '"reason": "test-only code"}'
+        )
+        orch._sonar.get_open_issues.side_effect = [[_make_issue("K1")]]
+        orch._github.comment_on_pr.return_value = True
+
+        orch.handle_pr_premerge("owner/repo", 3, "/tmp/proj")
+
+        comment = orch._github.comment_on_pr.call_args[0][2]
+        assert "False Positive Screening" in comment
+        assert "0.72" in comment
+        assert "test-only code" in comment
+
+    def test_fix_confidence_in_commit_message(self, _sleep):
+        config = _make_config(
+            triage=TriageConfig(enabled=True),
+            pr_premerge=PrPremergeConfig(delivery="log",
+                                         push_fix_commit=True),
+        )
+        orch = _make_orchestrator(config)
+        orch._sonar.run_scanner.return_value = True
+        orch._sonar.get_quality_gate_status.return_value = "ERROR"
+        orch._sonar.get_source_lines.return_value = ["line"]
+        orch._agent.generate_triage.return_value = (
+            '{"verdict": "TRUE_POSITIVE", "confidence": 0.9, "reason": "r"}'
+        )
+        orch._agent.generate_fix.return_value = (
+            'done\n{"fix_confidence": 0.8, "reason": "simple removal"}'
+        )
+        orch._sonar.get_open_issues.side_effect = [[_make_issue("K1")], []]
+        orch._github.commit_and_push.return_value = True
+
+        orch.handle_pr_premerge("o/r", 5, "/tmp/proj")
+
+        message = orch._github.commit_and_push.call_args[0][1]
+        assert "Fix confidence" in message
+        assert "0.80" in message
 
 
 class TestOrchestratorSummary:

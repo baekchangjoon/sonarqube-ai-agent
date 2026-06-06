@@ -26,6 +26,17 @@ class ClaudeCodeAgent(LLMAgent):
         logger.info("Invoking Claude Code (model=%s)", self._model)
         return self._run(cmd, working_dir)
 
+    def generate_triage(self, prompt: str,
+                        working_dir: str) -> str:
+        cmd = [
+            "claude", "-p",
+            "--allowedTools", "Read",  # judgment only — no edits
+            "--model", self._model,
+            prompt,
+        ]
+        logger.info("Invoking Claude Code triage (model=%s)", self._model)
+        return self._run(cmd, working_dir)
+
     def _build_cmd(self, prompt: str) -> list[str]:
         return [
             "claude", "-p",

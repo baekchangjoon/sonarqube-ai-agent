@@ -64,6 +64,13 @@ class NightlyBatchConfig:
 
 
 @dataclass
+class TriageConfig:
+    # LLM false-positive screening before each fix.
+    # FALSE_POSITIVE verdict → skip the fix and report with confidence.
+    enabled: bool = False
+
+
+@dataclass
 class AppConfig:
     agent: AgentConfig
     sonarqube: SonarQubeConfig
@@ -71,6 +78,7 @@ class AppConfig:
     pr_premerge: PrPremergeConfig
     post_merge: PostMergeConfig
     nightly_batch: NightlyBatchConfig
+    triage: TriageConfig = field(default_factory=TriageConfig)
 
     @staticmethod
     def load(config_path: str = None) -> "AppConfig":
@@ -83,6 +91,9 @@ class AppConfig:
             pr_premerge=_parse_pr_premerge(modes_raw),
             post_merge=_parse_post_merge(modes_raw),
             nightly_batch=_parse_nightly(modes_raw),
+            triage=TriageConfig(
+                enabled=raw.get("triage", {}).get("enabled", False),
+            ),
         )
 
 
