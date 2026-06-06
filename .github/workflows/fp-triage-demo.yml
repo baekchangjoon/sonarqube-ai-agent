@@ -1,0 +1,102 @@
+# SonarQube 오탐 분류 데모 — 룰 기반 필터 vs LLM 판단
+#
+# 수동 실행(workflow_dispatch) 전용. 결과는 Job Summary와 로그로 확인.
+#   - live:     OIDC → AssumeRole → Bedrock 위 Claude Code CLI로 실시간 판정
+#   - recorded: 기록된 LLM 판정 재생 (AWS/네트워크 불필요 — 무대 폴백용)
+#
+# 사전 준비 (repo Variables):
+#   AWS_ROLE_ARN            OIDC trust가 걸린 IAM Role ARN
+#   AWS_REGION              Bedrock 리전 (예: us-east-1)
+#   BEDROCK_MODEL_ID        Claude 인퍼런스 프로파일 ID
+#                           (예: us.anthropic.claude-sonnet-4-20250514-v1:0)
+#   BEDROCK_SMALL_MODEL_ID  (선택) 보조 모델 ID — 없으면 BEDROCK_MODEL_ID 사용
+
+name: FP Triage Demo (rules vs LLM)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "live = Bedrock 실시간 판정 / recorded = 기록 판정 재생"
+        type: choice
+        options:
+          - live
+          - recorded
+        default: live
+
+permissions:
+  id-token: write   # GitHub OIDC 토큰 발급 (AssumeRoleWithWebIdentity)
+  contents: read
+
+jobs:
+  fp-triage-demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC -> AssumeRole)
+        if: inputs.mode == 'live'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Claude Code CLI
+        if: inputs.mode == 'live'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Claude Code CLI (npm)
+        if: inputs.mode == 'live'
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run triage demo
+        env:
+          DEMO_MODE: ${{ inputs.mode }}
+          CLAUDE_CODE_USE_BEDROCK: "1"
+          ANTHROPIC_MODEL: ${{ vars.BEDROCK_MODEL_ID }}
+          ANTHROPIC_SMALL_FAST_MODEL: ${{ vars.BEDROCK_SMALL_MODEL_ID || vars.BEDROCK_MODEL_ID }}
+          FPDEMO_CLAUDE_MODEL: ${{ vars.BEDROCK_MODEL_ID }}
+        working-directory: demo/false-positive-triage
+        run: |
+          if [ "$DEMO_MODE" = "live" ]; then
+            java FalsePositiveTriageDemo.java --live | tee /tmp/demo.out
+          else
+            java FalsePositiveTriageDemo.java | tee /tmp/demo.out
+          fi
+
+      - name: Write job summary
+        env:
+          DEMO_MODE: ${{ inputs.mode }}
+        run: |
+          {
+            echo "## SonarQube 오탐 분류 — 룰 vs LLM"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| mode | \`$DEMO_MODE\` |"
+            if [ "$DEMO_MODE" = "live" ]; then
+              echo "| backend | Claude Code CLI on **AWS Bedrock** (OIDC → AssumeRole) |"
+              echo "| model | \`${{ vars.BEDROCK_MODEL_ID }}\` |"
+              echo "| region | \`${{ vars.AWS_REGION }}\` |"
+            else
+              echo "| backend | recorded verdicts (실제 --live 실행에서 기록, 네트워크 불필요) |"
+            fi
+            echo ""
+            echo '```'
+            sed 's/\x1b\[[0-9;]*m//g' /tmp/demo.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Assert scoreboard
+        run: |
+          clean=$(sed 's/\x1b\[[0-9;]*m//g' /tmp/demo.out)
+          echo "$clean" | grep -q "규칙 0/3" || { echo "::warning::룰 스코어가 예상(0/3)과 다릅니다"; }
+          echo "$clean" | grep -q "LLM 3/3" || { echo "::warning::LLM 스코어가 예상(3/3)과 다릅니다 — 비결정성 또는 백엔드 문제"; }
