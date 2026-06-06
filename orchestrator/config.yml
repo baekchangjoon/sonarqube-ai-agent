@@ -35,10 +35,17 @@ modes:
     enabled: true
     delivery: "comment"      # "comment": post via gh pr comment, "log": log only
     max_issues_per_run: 0    # 0 = unlimited
+    # Push verified fixes as a new commit to the PR branch
+    # (project_dir must be a git checkout of the PR branch)
+    push_fix_commit: true
 
   post_merge:
     enabled: true
     max_issues_per_run: 0
+    create_fix_pr: true
+    fix_pr:
+      repo: ""               # owner/repo — required when create_fix_pr: true
+      base: "main"
 
   nightly_batch:
     enabled: true
@@ -47,7 +54,7 @@ modes:
       - "BLOCKER"
       - "CRITICAL"
       - "MAJOR"
-    create_fix_pr: false
+    create_fix_pr: true
     fix_pr:
       repo: ""               # owner/repo — required when create_fix_pr: true
       base: "main"

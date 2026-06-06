@@ -159,6 +159,54 @@ class TestOrchestratorPrPremergeEphemeral:
         assert result.quality_gate == "DISABLED"
         orch._sonar.run_scanner.assert_not_called()
 
+    def test_push_fix_commit_pushes_to_pr_branch(self, _sleep):
+        config = _make_config(
+            pr_premerge=PrPremergeConfig(push_fix_commit=True,
+                                         delivery="log"),
+        )
+        orch = _make_orchestrator(config)
+        orch._sonar.run_scanner.return_value = True
+        orch._sonar.get_open_issues.side_effect = [[_make_issue("K1")], []]
+        orch._sonar.get_quality_gate_status.return_value = "ERROR"
+        orch._sonar.get_source_lines.return_value = ["line"]
+        orch._github.commit_and_push.return_value = True
+
+        orch.handle_pr_premerge("o/r", 9, "/tmp/proj")
+
+        orch._github.commit_and_push.assert_called_once()
+        args = orch._github.commit_and_push.call_args[0]
+        assert args[0] == "/tmp/proj"
+        assert "PR #9" in args[1]
+
+    def test_push_fix_commit_default_off(self, _sleep):
+        orch = _make_orchestrator()
+        orch._sonar.run_scanner.return_value = True
+        orch._sonar.get_open_issues.side_effect = [[_make_issue("K1")], []]
+        orch._sonar.get_quality_gate_status.return_value = "ERROR"
+        orch._sonar.get_source_lines.return_value = ["line"]
+
+        orch.handle_pr_premerge("o/r", 9, "/tmp/proj")
+
+        orch._github.commit_and_push.assert_not_called()
+
+    def test_push_fix_commit_skipped_without_verified(self, _sleep):
+        config = _make_config(
+            pr_premerge=PrPremergeConfig(push_fix_commit=True,
+                                         delivery="log"),
+        )
+        orch = _make_orchestrator(config)
+        orch._sonar.run_scanner.return_value = True
+        orch._sonar.get_open_issues.side_effect = [
+            [_make_issue("K1")],
+            [_make_issue("K1")],  # still open — not verified
+        ]
+        orch._sonar.get_quality_gate_status.return_value = "ERROR"
+        orch._sonar.get_source_lines.return_value = ["line"]
+
+        orch.handle_pr_premerge("o/r", 9, "/tmp/proj")
+
+        orch._github.commit_and_push.assert_not_called()
+
 
 @patch("src.orchestrator.time.sleep")
 class TestOrchestratorPrPremergeNative:
@@ -247,6 +295,44 @@ class TestOrchestratorPostMerge:
         assert result.fixes_verified == 0
         assert result.quality_gate == "ERROR"
 
+    def test_post_merge_creates_fix_pr_when_configured(self, _sleep):
+        config = _make_config(
+            post_merge=PostMergeConfig(
+                create_fix_pr=True,
+                fix_pr_repo="owner/repo",
+                fix_pr_base="develop",
+            ),
+        )
+        orch = _make_orchestrator(config)
+        orch._sonar.run_scanner.return_value = True
+        orch._sonar.get_new_issues.return_value = [_make_issue("K1")]
+        orch._sonar.get_open_issues.return_value = []  # verification
+        orch._sonar.get_quality_gate_status.return_value = "ERROR"
+        orch._sonar.get_source_lines.return_value = ["line"]
+        orch._github.push_fix_branch.return_value = True
+        orch._github.create_fix_pr.return_value = "https://pr/2"
+
+        result = orch.handle_post_merge(project_dir="/tmp/proj")
+
+        assert result.fixes_verified == 1
+        branch = orch._github.push_fix_branch.call_args[0][1]
+        assert "post-merge" in branch
+        pr_kwargs = orch._github.create_fix_pr.call_args[1]
+        assert pr_kwargs["repo"] == "owner/repo"
+        assert pr_kwargs["base"] == "develop"
+
+    def test_post_merge_no_fix_pr_by_default(self, _sleep):
+        orch = _make_orchestrator()
+        orch._sonar.run_scanner.return_value = True
+        orch._sonar.get_new_issues.return_value = [_make_issue("K1")]
+        orch._sonar.get_open_issues.return_value = []
+        orch._sonar.get_quality_gate_status.return_value = "ERROR"
+        orch._sonar.get_source_lines.return_value = ["line"]
+
+        orch.handle_post_merge(project_dir="/tmp/proj")
+
+        orch._github.push_fix_branch.assert_not_called()
+
     def test_post_merge_with_project_dir_verifies(self, _sleep):
         orch = _make_orchestrator()
         orch._sonar.run_scanner.return_value = True
@@ -317,6 +403,8 @@ class TestOrchestratorNightlyBatch:
 
         assert result.fixes_verified == 1
         orch._github.push_fix_branch.assert_called_once()
+        branch = orch._github.push_fix_branch.call_args[0][1]
+        assert "nightly" in branch
         orch._github.create_fix_pr.assert_called_once()
         pr_kwargs = orch._github.create_fix_pr.call_args[1]
         assert pr_kwargs["repo"] == "owner/repo"

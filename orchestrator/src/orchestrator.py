@@ -90,6 +90,7 @@ class SonarQubeOrchestrator:
         fixes, verified = self._fix_and_verify(
             issues, project_dir, ephemeral_key, scan_project_name=pr_name,
         )
+        self._push_pr_fix_commit(project_dir, pr_number, verified)
         self._deliver_pr_comment(repo, pr_number, issues,
                                  ephemeral_key, verified)
         return self._build_result("pr_premerge", ephemeral_key,
@@ -122,6 +123,7 @@ class SonarQubeOrchestrator:
             issues, project_dir, main_key,
             pull_request=pr_key, scan_extra_args=extra_args,
         )
+        self._push_pr_fix_commit(project_dir, pr_number, verified)
         self._deliver_pr_comment(repo, pr_number, issues, main_key, verified)
         return self._build_result("pr_premerge", main_key,
                                   issues, fixes, verified, gate)
@@ -138,6 +140,7 @@ class SonarQubeOrchestrator:
         if not self._config.post_merge.enabled:
             return self._disabled("post_merge")
 
+        pm_cfg = self._config.post_merge
         main_key = self._config.sonarqube.main_project_key
         logger.info("Mode 2: Post-merge analysis (%s)", main_key)
 
@@ -149,11 +152,16 @@ class SonarQubeOrchestrator:
 
         if not issues:
             return ModeResult("post_merge", main_key, 0, 0, 0, gate)
-        issues = _limit(issues, self._config.post_merge.max_issues_per_run)
+        issues = _limit(issues, pm_cfg.max_issues_per_run)
 
         fixes, verified = self._fix_with_optional_verify(
             issues, project_dir, main_key,
         )
+        if pm_cfg.create_fix_pr and verified:
+            self._create_fix_pr_from_fixes(
+                project_dir, verified, pm_cfg.fix_pr_repo,
+                pm_cfg.fix_pr_base, "post-merge",
+            )
         return self._build_result("post_merge", main_key,
                                   issues, fixes, verified, gate)
 
@@ -184,7 +192,10 @@ class SonarQubeOrchestrator:
             issues, project_dir, main_key,
         )
         if batch_cfg.create_fix_pr and verified:
-            self._create_nightly_fix_pr(project_dir, verified, batch_cfg)
+            self._create_fix_pr_from_fixes(
+                project_dir, verified, batch_cfg.fix_pr_repo,
+                batch_cfg.fix_pr_base, "nightly",
+            )
         return self._build_result("nightly_batch", main_key,
                                   issues, fixes, verified, gate)
 
@@ -332,20 +343,32 @@ class SonarQubeOrchestrator:
             logger.warning("PR comment failed — falling back to log")
         logger.info("PR comment (log delivery):\n%s", comment)
 
-    def _create_nightly_fix_pr(self, project_dir: str, verified,
-                               batch_cfg) -> str:
-        if not batch_cfg.fix_pr_repo:
+    def _push_pr_fix_commit(self, project_dir: str, pr_number: int,
+                            verified) -> None:
+        """Mode 1: push verified fixes as a new commit to the PR branch."""
+        if not verified or not self._config.pr_premerge.push_fix_commit:
+            return
+        message = (f"fix: resolve {len(verified)} SonarQube issue(s) "
+                   f"via AI agent (PR #{pr_number})")
+        if not self._github.commit_and_push(project_dir, message):
+            logger.warning("Failed to push fix commit to PR branch")
+
+    def _create_fix_pr_from_fixes(self, project_dir: str, verified,
+                                  repo: str, base: str,
+                                  label: str) -> str:
+        """Mode 2/3: push verified fixes to a new branch and open a PR."""
+        if not repo:
             logger.warning("create_fix_pr enabled but fix_pr.repo "
                            "not set — skipping PR creation")
             return ""
-        branch = f"fix/sonarqube-nightly-{time.strftime('%Y%m%d-%H%M%S')}"
+        branch = (f"fix/sonarqube-{label}-"
+                  f"{time.strftime('%Y%m%d-%H%M%S')}")
         title = (f"fix: resolve {len(verified)} SonarQube issue(s) "
-                 f"[nightly batch]")
+                 f"[{label}]")
         if not self._github.push_fix_branch(project_dir, branch, title):
             return ""
         return self._github.create_fix_pr(
-            repo=batch_cfg.fix_pr_repo, branch=branch,
-            base=batch_cfg.fix_pr_base, title=title,
+            repo=repo, branch=branch, base=base, title=title,
             body=_summarize_fixes(verified),
         )
 

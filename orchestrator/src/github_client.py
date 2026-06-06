@@ -74,20 +74,27 @@ class GitHubClient:
                         message: str) -> bool:
         """Create a branch from the current state, commit all changes,
         and push it to origin."""
-        steps = [
+        ok = _run_git_steps([
             ["git", "-C", project_dir, "checkout", "-b", branch],
             ["git", "-C", project_dir, "add", "-A"],
             ["git", "-C", project_dir, "commit", "-m", message],
             ["git", "-C", project_dir, "push", "-u", "origin", branch],
-        ]
-        for cmd in steps:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.error("%s failed: %s", " ".join(cmd[:4]),
-                             result.stderr.strip()[-300:])
-                return False
-        logger.info("Pushed fix branch: %s", branch)
-        return True
+        ])
+        if ok:
+            logger.info("Pushed fix branch: %s", branch)
+        return ok
+
+    @staticmethod
+    def commit_and_push(project_dir: str, message: str) -> bool:
+        """Commit all changes on the current branch and push to origin."""
+        ok = _run_git_steps([
+            ["git", "-C", project_dir, "add", "-A"],
+            ["git", "-C", project_dir, "commit", "-m", message],
+            ["git", "-C", project_dir, "push"],
+        ])
+        if ok:
+            logger.info("Pushed fix commit to current branch")
+        return ok
 
     @staticmethod
     def format_issues_comment(issues: list[SonarIssue],
@@ -100,6 +107,16 @@ class GitHubClient:
             issues, project_key, sonar_url, fix_summary
         )
         return "\n".join(header + table_rows + footer)
+
+
+def _run_git_steps(steps: list) -> bool:
+    for cmd in steps:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.error("%s failed: %s", " ".join(cmd[:4]),
+                         result.stderr.strip()[-300:])
+            return False
+    return True
 
 
 def _build_comment_header(issue_count: int) -> list[str]:

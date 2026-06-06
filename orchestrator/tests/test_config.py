@@ -102,9 +102,36 @@ class TestAppConfig:
         assert config.pr_premerge.enabled is True
         assert config.pr_premerge.delivery == "comment"
         assert config.pr_premerge.max_issues_per_run == 0
+        assert config.pr_premerge.push_fix_commit is False
         assert config.post_merge.enabled is True
+        assert config.post_merge.create_fix_pr is False
         assert config.nightly_batch.create_fix_pr is False
         assert config.nightly_batch.fix_pr_base == "main"
+
+    def test_pr_premerge_push_fix_commit(self, tmp_path):
+        custom = {
+            "modes": {"pr_premerge": {"push_fix_commit": True}},
+        }
+        config_path = tmp_path / "c.yml"
+        config_path.write_text(yaml.dump(custom))
+        config = AppConfig.load(str(config_path))
+        assert config.pr_premerge.push_fix_commit is True
+
+    def test_post_merge_fix_pr_config(self, tmp_path):
+        custom = {
+            "modes": {
+                "post_merge": {
+                    "create_fix_pr": True,
+                    "fix_pr": {"repo": "owner/repo", "base": "develop"},
+                },
+            },
+        }
+        config_path = tmp_path / "c.yml"
+        config_path.write_text(yaml.dump(custom))
+        config = AppConfig.load(str(config_path))
+        assert config.post_merge.create_fix_pr is True
+        assert config.post_merge.fix_pr_repo == "owner/repo"
+        assert config.post_merge.fix_pr_base == "develop"
 
     def test_nightly_fix_pr_config(self, tmp_path):
         custom = {

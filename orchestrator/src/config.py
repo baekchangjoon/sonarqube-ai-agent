@@ -37,12 +37,18 @@ class PrPremergeConfig:
     enabled: bool = True
     delivery: str = "comment"  # "comment": gh pr comment, "log": log only
     max_issues_per_run: int = 0  # 0 = unlimited
+    # Push verified fixes as a new commit to the PR branch
+    # (project_dir must be a git checkout of that branch)
+    push_fix_commit: bool = False
 
 
 @dataclass
 class PostMergeConfig:
     enabled: bool = True
     max_issues_per_run: int = 0
+    create_fix_pr: bool = False
+    fix_pr_repo: str = ""  # owner/repo — required when create_fix_pr=true
+    fix_pr_base: str = "main"
 
 
 @dataclass
@@ -126,14 +132,19 @@ def _parse_pr_premerge(modes_raw: dict) -> PrPremergeConfig:
         enabled=raw.get("enabled", True),
         delivery=raw.get("delivery", "comment"),
         max_issues_per_run=raw.get("max_issues_per_run", 0),
+        push_fix_commit=raw.get("push_fix_commit", False),
     )
 
 
 def _parse_post_merge(modes_raw: dict) -> PostMergeConfig:
     raw = modes_raw.get("post_merge", {})
+    fix_pr_raw = raw.get("fix_pr", {})
     return PostMergeConfig(
         enabled=raw.get("enabled", True),
         max_issues_per_run=raw.get("max_issues_per_run", 0),
+        create_fix_pr=raw.get("create_fix_pr", False),
+        fix_pr_repo=fix_pr_raw.get("repo", ""),
+        fix_pr_base=fix_pr_raw.get("base", "main"),
     )
 
 
