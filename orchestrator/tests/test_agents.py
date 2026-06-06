@@ -71,7 +71,7 @@ class TestLLMAgentInterface:
         assert "NullPointerException" in prompt
         assert "Foo.java" in prompt
         assert "42" in prompt
-        assert "JUnit 5" in prompt
+        assert "in place" in prompt
 
 
 class TestFixResult:

@@ -70,6 +70,26 @@ class GitHubClient:
         return pr_url
 
     @staticmethod
+    def push_fix_branch(project_dir: str, branch: str,
+                        message: str) -> bool:
+        """Create a branch from the current state, commit all changes,
+        and push it to origin."""
+        steps = [
+            ["git", "-C", project_dir, "checkout", "-b", branch],
+            ["git", "-C", project_dir, "add", "-A"],
+            ["git", "-C", project_dir, "commit", "-m", message],
+            ["git", "-C", project_dir, "push", "-u", "origin", branch],
+        ]
+        for cmd in steps:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.error("%s failed: %s", " ".join(cmd[:4]),
+                             result.stderr.strip()[-300:])
+                return False
+        logger.info("Pushed fix branch: %s", branch)
+        return True
+
+    @staticmethod
     def format_issues_comment(issues: list[SonarIssue],
                               project_key: str,
                               sonar_url: str,

@@ -22,14 +22,23 @@ sonarqube:
 
 scanner:
   ephemeral_key_pattern: "{project}-pr-{pr_number}"
+  # "ephemeral": CE workaround — temp project per PR (no plugin needed)
+  # "native":    sonar.pullrequest.* params (requires branch/PR plugin)
+  pr_mode: "ephemeral"
+  # Shell command run in project_dir before each scan (empty = skip)
+  rebuild_command: >-
+    docker run --rm -v "$(pwd)":/project -w /project
+    maven:3.9-eclipse-temurin-17 mvn -q clean compile test-compile
 
 modes:
   pr_premerge:
     enabled: true
-    delivery: "comment"
+    delivery: "comment"      # "comment": post via gh pr comment, "log": log only
+    max_issues_per_run: 0    # 0 = unlimited
 
   post_merge:
     enabled: true
+    max_issues_per_run: 0
 
   nightly_batch:
     enabled: true
@@ -38,3 +47,7 @@ modes:
       - "BLOCKER"
       - "CRITICAL"
       - "MAJOR"
+    create_fix_pr: false
+    fix_pr:
+      repo: ""               # owner/repo — required when create_fix_pr: true
+      base: "main"

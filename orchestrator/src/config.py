@@ -24,12 +24,25 @@ class SonarQubeConfig:
 @dataclass
 class ScannerConfig:
     ephemeral_key_pattern: str = "{project}-pr-{pr_number}"
+    # "ephemeral": CE workaround — temp project per PR
+    # "native":    sonar.pullrequest.* params (requires branch/PR plugin)
+    pr_mode: str = "ephemeral"
+    # Shell command run in project_dir before each scan (e.g. maven build).
+    # Empty = skip.
+    rebuild_command: str = ""
 
 
 @dataclass
-class ModeToggle:
-    pr_premerge_enabled: bool = True
-    post_merge_enabled: bool = True
+class PrPremergeConfig:
+    enabled: bool = True
+    delivery: str = "comment"  # "comment": gh pr comment, "log": log only
+    max_issues_per_run: int = 0  # 0 = unlimited
+
+
+@dataclass
+class PostMergeConfig:
+    enabled: bool = True
+    max_issues_per_run: int = 0
 
 
 @dataclass
@@ -39,6 +52,9 @@ class NightlyBatchConfig:
     severity_filter: list = field(
         default_factory=lambda: ["BLOCKER", "CRITICAL", "MAJOR"]
     )
+    create_fix_pr: bool = False
+    fix_pr_repo: str = ""  # owner/repo — required when create_fix_pr=true
+    fix_pr_base: str = "main"
 
 
 @dataclass
@@ -46,7 +62,8 @@ class AppConfig:
     agent: AgentConfig
     sonarqube: SonarQubeConfig
     scanner: ScannerConfig
-    modes: ModeToggle
+    pr_premerge: PrPremergeConfig
+    post_merge: PostMergeConfig
     nightly_batch: NightlyBatchConfig
 
     @staticmethod
@@ -57,7 +74,8 @@ class AppConfig:
             agent=_parse_agent(raw.get("agent", {})),
             sonarqube=_parse_sonarqube(raw.get("sonarqube", {})),
             scanner=_parse_scanner(raw.get("scanner", {})),
-            modes=_parse_mode_toggles(modes_raw),
+            pr_premerge=_parse_pr_premerge(modes_raw),
+            post_merge=_parse_post_merge(modes_raw),
             nightly_batch=_parse_nightly(modes_raw),
         )
 
@@ -88,30 +106,49 @@ def _parse_sonarqube(raw: dict) -> SonarQubeConfig:
 
 
 def _parse_scanner(raw: dict) -> ScannerConfig:
+    pr_mode = raw.get("pr_mode", "ephemeral")
+    if pr_mode not in ("ephemeral", "native"):
+        raise ValueError(
+            f"scanner.pr_mode must be 'ephemeral' or 'native', got: {pr_mode}"
+        )
     return ScannerConfig(
         ephemeral_key_pattern=raw.get(
             "ephemeral_key_pattern", "{project}-pr-{pr_number}"
         ),
+        pr_mode=pr_mode,
+        rebuild_command=raw.get("rebuild_command", ""),
     )
 
 
-def _parse_mode_toggles(modes_raw: dict) -> ModeToggle:
-    pr_raw = modes_raw.get("pr_premerge", {})
-    pm_raw = modes_raw.get("post_merge", {})
-    return ModeToggle(
-        pr_premerge_enabled=pr_raw.get("enabled", True),
-        post_merge_enabled=pm_raw.get("enabled", True),
+def _parse_pr_premerge(modes_raw: dict) -> PrPremergeConfig:
+    raw = modes_raw.get("pr_premerge", {})
+    return PrPremergeConfig(
+        enabled=raw.get("enabled", True),
+        delivery=raw.get("delivery", "comment"),
+        max_issues_per_run=raw.get("max_issues_per_run", 0),
+    )
+
+
+def _parse_post_merge(modes_raw: dict) -> PostMergeConfig:
+    raw = modes_raw.get("post_merge", {})
+    return PostMergeConfig(
+        enabled=raw.get("enabled", True),
+        max_issues_per_run=raw.get("max_issues_per_run", 0),
     )
 
 
 def _parse_nightly(modes_raw: dict) -> NightlyBatchConfig:
     raw = modes_raw.get("nightly_batch", {})
+    fix_pr_raw = raw.get("fix_pr", {})
     return NightlyBatchConfig(
         enabled=raw.get("enabled", True),
         max_issues_per_run=raw.get("max_issues_per_run", 10),
         severity_filter=raw.get(
             "severity_filter", ["BLOCKER", "CRITICAL", "MAJOR"]
         ),
+        create_fix_pr=raw.get("create_fix_pr", False),
+        fix_pr_repo=fix_pr_raw.get("repo", ""),
+        fix_pr_base=fix_pr_raw.get("base", "main"),
     )
 
 

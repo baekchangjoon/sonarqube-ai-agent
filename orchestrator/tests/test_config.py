@@ -76,3 +76,48 @@ class TestAppConfig:
             project="myproj", pr_number=42
         )
         assert key == "myproj-pr-42"
+
+    def test_pr_mode_defaults_to_ephemeral(self, tmp_path):
+        config_path = tmp_path / "c.yml"
+        config_path.write_text(yaml.dump({"scanner": {}}))
+        config = AppConfig.load(str(config_path))
+        assert config.scanner.pr_mode == "ephemeral"
+
+    def test_pr_mode_native(self, tmp_path):
+        config_path = tmp_path / "c.yml"
+        config_path.write_text(yaml.dump({"scanner": {"pr_mode": "native"}}))
+        config = AppConfig.load(str(config_path))
+        assert config.scanner.pr_mode == "native"
+
+    def test_invalid_pr_mode_raises(self, tmp_path):
+        config_path = tmp_path / "c.yml"
+        config_path.write_text(yaml.dump({"scanner": {"pr_mode": "bogus"}}))
+        with pytest.raises(ValueError):
+            AppConfig.load(str(config_path))
+
+    def test_mode_configs_defaults(self, tmp_path):
+        config_path = tmp_path / "c.yml"
+        config_path.write_text(yaml.dump({}))
+        config = AppConfig.load(str(config_path))
+        assert config.pr_premerge.enabled is True
+        assert config.pr_premerge.delivery == "comment"
+        assert config.pr_premerge.max_issues_per_run == 0
+        assert config.post_merge.enabled is True
+        assert config.nightly_batch.create_fix_pr is False
+        assert config.nightly_batch.fix_pr_base == "main"
+
+    def test_nightly_fix_pr_config(self, tmp_path):
+        custom = {
+            "modes": {
+                "nightly_batch": {
+                    "create_fix_pr": True,
+                    "fix_pr": {"repo": "owner/repo", "base": "develop"},
+                },
+            },
+        }
+        config_path = tmp_path / "c.yml"
+        config_path.write_text(yaml.dump(custom))
+        config = AppConfig.load(str(config_path))
+        assert config.nightly_batch.create_fix_pr is True
+        assert config.nightly_batch.fix_pr_repo == "owner/repo"
+        assert config.nightly_batch.fix_pr_base == "develop"

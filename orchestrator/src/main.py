@@ -52,6 +52,7 @@ def _handle_pr_premerge(args, orch: SonarQubeOrchestrator) -> int:
     result = orch.handle_pr_premerge(
         repo=args.repo, pr_number=args.pr_number,
         project_dir=args.project_dir,
+        pr_branch=args.pr_branch, pr_base=args.pr_base,
     )
     _print_result(result)
     if args.cleanup:
@@ -99,6 +100,10 @@ def _add_pr_premerge_cmd(sub) -> None:
     cmd.add_argument("--repo", required=True)
     cmd.add_argument("--pr-number", type=int, required=True)
     cmd.add_argument("--project-dir", required=True)
+    cmd.add_argument("--pr-branch", default=None,
+                     help="PR branch name (native pr_mode)")
+    cmd.add_argument("--pr-base", default="main",
+                     help="PR base branch (native pr_mode)")
     cmd.add_argument("--cleanup", action="store_true",
                      help="Delete ephemeral project after analysis")
 

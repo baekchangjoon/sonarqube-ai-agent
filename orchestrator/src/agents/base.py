@@ -51,16 +51,17 @@ class LLMAgent(ABC):
                          file_path: str, line: int,
                          source_context: str) -> str:
         return (
-            f"Fix the following SonarQube issue.\n\n"
+            f"Fix the following SonarQube issue by editing the file "
+            f"in place.\n\n"
             f"Rule: {issue_rule}\n"
             f"Message: {issue_message}\n"
             f"File: {file_path}\n"
             f"Line: {line}\n\n"
-            f"Source context:\n```java\n{source_context}\n```\n\n"
+            f"Source context (around line {line}):\n"
+            f"```java\n{source_context}\n```\n\n"
             f"Requirements:\n"
-            f"1. Fix ONLY the reported issue. Do not change unrelated code.\n"
-            f"2. Generate a JUnit 5 test that verifies the fix.\n"
-            f"3. Follow Google Java Style Guide.\n"
-            f"4. Return the fix as a unified diff and the test as a "
-            f"complete Java file.\n"
+            f"1. Edit {file_path} in place to fix ONLY the reported "
+            f"issue. Do not change unrelated code.\n"
+            f"2. Keep the existing code style.\n"
+            f"3. The code must still compile after the fix.\n"
         )
