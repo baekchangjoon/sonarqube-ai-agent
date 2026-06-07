@@ -1,12 +1,18 @@
-"""Aggregate fp-triage benchmark results into a markdown report.
+"""Aggregate fp/tp-triage benchmark results into a markdown report.
 
 Usage: python fp_benchmark_report.py result-*.json > report.md
+
+Each result file is {"set", "fixer_model", "judge_model",
+"fp": <ModeResult>, "tp": <ModeResult>} — fp run on benchmark/fp-corpus
+(all issues false positives), tp run on benchmark/tp-corpus (all issues
+real defects).
 """
 import json
 import sys
 from datetime import date
 
 GROUND_TRUTH_FP = 32  # benchmark/fp-corpus: every issue is a false positive
+GROUND_TRUTH_TP = 24  # benchmark/tp-corpus: every issue is a real defect
 
 # USD per 1M tokens (input, output) — fallback when the CLI reports no
 # cost (e.g. Claude Code on Bedrock). Cache-read tokens are charged as
@@ -31,36 +37,61 @@ def fmt_cost(value, estimated=False):
     return f"${value:.4f}" + ("\\*" if estimated else "")
 
 
+def run_cost(run, fixer_model):
+    cost = run.get("llm_cost_usd")
+    if cost:
+        return cost, False
+    return estimate(fixer_model, run["llm_input_tokens"],
+                    run["llm_output_tokens"]), True
+
+
 def main(paths):
     rows = []
     for path in sorted(paths):
         r = json.load(open(path))
-        skipped = r["issues_skipped_as_fp"]
-        found = r["issues_found"]
-        recall = skipped / found * 100 if found else 0.0
-        cost = r.get("llm_cost_usd")
-        estimated = False
-        if not cost:  # CLI on Bedrock may report 0 — estimate from tokens
-            cost = estimate(r["fixer_model"], r["llm_input_tokens"],
-                            r["llm_output_tokens"])
-            estimated = True
-        rows.append({**r, "recall": recall, "cost": cost,
-                     "estimated": estimated})
+        fp, tp = r["fp"], r["tp"]
+        correct_skips = fp["issues_skipped_as_fp"]
+        wrong_skips = tp["issues_skipped_as_fp"]
+        recall = correct_skips / fp["issues_found"] * 100 \
+            if fp["issues_found"] else 0.0
+        total_skips = correct_skips + wrong_skips
+        precision = correct_skips / total_skips * 100 if total_skips else None
+        fp_cost, fp_est = run_cost(fp, r["fixer_model"])
+        tp_cost, tp_est = run_cost(tp, r["fixer_model"])
+        cost = fp_cost + tp_cost if None not in (fp_cost, tp_cost) else None
+        rows.append({**r, "recall": recall, "precision": precision,
+                     "correct_skips": correct_skips,
+                     "wrong_skips": wrong_skips, "cost": cost,
+                     "estimated": fp_est or tp_est})
 
     print(f"# FP 트리아지 벤치마크 — 모델 세트 비교 ({date.today()})")
     print()
-    print(f"- 대상: `benchmark/fp-corpus` — 이슈 {GROUND_TRUTH_FP}개, "
-          f"전부 ground truth = FALSE_POSITIVE")
-    print("- 파이프라인: 스캔 → LLM 판정(오탐이면 스킵) → 미스킵분 수정 → "
-          "재스캔 검증 (`assessment.strategy: triage`)")
-    print("- 이상적 결과: 오탐 검출 32/32, 수정 0건 — 판정 비용만 발생")
+    print(f"- fp-corpus: 이슈 {GROUND_TRUTH_FP}개, 전부 ground truth = "
+          f"FALSE_POSITIVE — 스킵이 정답 (재현율)")
+    print(f"- tp-corpus: 이슈 {GROUND_TRUTH_TP}개, 전부 ground truth = "
+          f"TRUE_POSITIVE — 스킵이 오판 (놓친 실결함)")
+    print("- 파이프라인: 코퍼스별 스캔 → LLM 판정(오탐이면 스킵) → "
+          "미스킵분 수정 → 재스캔 검증 (`assessment.strategy: triage`)")
+    print(f"- 이상적 결과: fp에서 {GROUND_TRUTH_FP} 스킵·수정 0, "
+          f"tp에서 0 스킵·수정 {GROUND_TRUTH_TP}")
     print()
-    print("| 세트 (수정/판정) | 오탐 검출 | 재현율 | 수정 시도 | 토큰 (in/out) | 비용 |")
-    print("|---|---|---|---|---|---|")
+    print("| 세트 (수정/판정) | 오탐 검출 (재현율) | 실결함 오스킵 | 정밀도 "
+          "| 수정 시도 (fp/tp) | 토큰 (in/out) | 비용 |")
+    print("|---|---|---|---|---|---|---|")
     for r in sorted(rows, key=lambda x: -x["recall"]):
-        print(f"| {r['set']} | {r['issues_skipped_as_fp']}/{r['issues_found']} "
-              f"| {r['recall']:.0f}% | {r['fixes_attempted']} "
-              f"| {r['llm_input_tokens']:,} / {r['llm_output_tokens']:,} "
+        prec = f"{r['precision']:.0f}%" if r["precision"] is not None \
+            else "n/a"
+        tokens_in = r["fp"]["llm_input_tokens"] + r["tp"]["llm_input_tokens"]
+        tokens_out = (r["fp"]["llm_output_tokens"]
+                      + r["tp"]["llm_output_tokens"])
+        print(f"| {r['set']} "
+              f"| {r['correct_skips']}/{r['fp']['issues_found']} "
+              f"({r['recall']:.0f}%) "
+              f"| {r['wrong_skips']}/{r['tp']['issues_found']} "
+              f"| {prec} "
+              f"| {r['fp']['fixes_attempted']} / "
+              f"{r['tp']['fixes_attempted']} "
+              f"| {tokens_in:,} / {tokens_out:,} "
               f"| {fmt_cost(r['cost'], r['estimated'])} |")
     print()
     print("| 세트 | 수정 모델 | 판정 모델 |")
@@ -71,9 +102,9 @@ def main(paths):
     print("\\* = CLI가 비용을 보고하지 않아 토큰×단가표로 추정한 값 "
           "(캐시 읽기를 일반 입력 단가로 계산한 상한치).")
     print()
-    print("주: 오탐을 놓치면(미스킵) 그 이슈는 수정 단계로 넘어가 "
-          "수정 비용이 추가되고, 멀쩡한 코드가 변경된다 — 재현율과 비용은 "
-          "독립 지표가 아니라 연결되어 있다.")
+    print("주: 재현율 미스(오탐을 수정 단계로)는 멀쩡한 코드 변경 + 수정 "
+          "비용으로, 정밀도 미스(실결함을 스킵)는 결함 잔존으로 이어진다 — "
+          "후자가 더 위험하다.")
 
 
 if __name__ == "__main__":

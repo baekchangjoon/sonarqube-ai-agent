@@ -1,11 +1,15 @@
-# FP 트리아지 벤치마크 — 수정/판정 모델 세트별 오탐 검출률·비용 비교
+# FP 트리아지 벤치마크 — 수정/판정 모델 세트별 재현율·정밀도·비용 비교
 #
-# benchmark/fp-corpus(32개 이슈, 전부 ground-truth FP)를 3개 모델 세트로
-# 풀파이프라인(스캔 → 판정 → 미스킵분 수정 → 재스캔 검증) 실행:
+# 세트마다 두 코퍼스를 풀파이프라인(스캔 → 판정 → 미스킵분 수정 → 재스캔
+# 검증)으로 실행:
+#   benchmark/fp-corpus (32이슈, 전부 GT=FP) → 재현율: 스킵 / 32
+#   benchmark/tp-corpus (24이슈, 전부 GT=TP) → 오스킵(놓친 실결함): 스킵 수
+#   정밀도 = fp 스킵 / (fp 스킵 + tp 스킵)
+# 모델 세트:
 #   sonnet-opus : 수정=Sonnet 4.6,  판정=Opus 4.6
 #   haiku-sonnet: 수정=Haiku 4.5,   판정=Sonnet 4.6
 #   opus-opus   : 수정=Opus 4.6,    판정=Opus 4.6
-# 이상적 결과: issues_skipped_as_fp = 32 (수정 0건, 판정 비용만 발생)
+# 이상적 결과: fp에서 32 스킵·수정 0, tp에서 0 스킵·수정 24
 #
 # 필요: repo Variables(AWS_ROLE_ARN, AWS_REGION), Secret(SONAR_TOKEN)
 
@@ -40,7 +44,7 @@ jobs:
             judge_model: global.anthropic.claude-opus-4-6-v1
             pr: 103
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v5
 
@@ -81,19 +85,22 @@ jobs:
           print("judge OK:", os.environ["JUDGE_MODEL"])
           EOF
 
-      - name: Build fp-corpus
-        working-directory: benchmark/fp-corpus
+      - name: Build corpora
         run: |
-          docker run --rm -v "$PWD":/project -w /project \
-            maven:3.9-eclipse-temurin-17 mvn -q clean compile test-compile
+          for corpus in fp-corpus tp-corpus; do
+            docker run --rm -v "$GITHUB_WORKSPACE/benchmark/$corpus":/project \
+              -w /project maven:3.9-eclipse-temurin-17 \
+              mvn -q clean compile test-compile
+          done
 
-      - name: Write benchmark config
+      - name: Write benchmark configs
         env:
           FIXER_MODEL: ${{ matrix.fixer_model }}
           JUDGE_MODEL: ${{ matrix.judge_model }}
           AWS_REGION: ${{ vars.AWS_REGION }}
         run: |
-          cat > bench-config.yml <<EOF
+          for corpus in fp tp; do
+            cat > bench-config-$corpus.yml <<EOF
           agent:
             type: "claude-code"
             judge_type: "bedrock-api"
@@ -106,7 +113,7 @@ jobs:
           sonarqube:
             url: "$SONAR_URL"
             token: "\${SONAR_TOKEN}"
-            main_project_key: "fp-corpus-bench"
+            main_project_key: "$corpus-corpus-bench"
           scanner:
             ephemeral_key_pattern: "{project}-pr-{pr_number}"
             pr_mode: "ephemeral"
@@ -126,23 +133,25 @@ jobs:
             nightly_batch:
               enabled: true
           EOF
+          done
 
-      - name: Run triage pipeline
+      - name: Run triage pipeline (fp-corpus, then tp-corpus)
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           CLAUDE_CODE_USE_BEDROCK: "1"
           AWS_REGION: ${{ vars.AWS_REGION }}
           ANTHROPIC_SMALL_FAST_MODEL: global.anthropic.claude-haiku-4-5-20251001-v1:0
-          BENCH_SET: ${{ matrix.set }}
           BENCH_PR: ${{ matrix.pr }}
         working-directory: orchestrator
         run: |
-          python -m src.main --config ../bench-config.yml pr-premerge \
-            --repo dummy/bench --pr-number "$BENCH_PR" \
-            --project-dir "$GITHUB_WORKSPACE/benchmark/fp-corpus" \
-            --cleanup > ../result.json 2> ../run.log || true
-          tail -40 ../run.log
-          cat ../result.json
+          for corpus in fp tp; do
+            python -m src.main --config ../bench-config-$corpus.yml \
+              pr-premerge --repo dummy/bench --pr-number "$BENCH_PR" \
+              --project-dir "$GITHUB_WORKSPACE/benchmark/$corpus-corpus" \
+              --cleanup > ../result-$corpus.json 2> ../run-$corpus.log || true
+            tail -40 ../run-$corpus.log
+            cat ../result-$corpus.json
+          done
 
       - name: Attach set metadata
         env:
@@ -152,11 +161,15 @@ jobs:
         run: |
           python - <<'EOF'
           import json, os
-          data = json.load(open("result.json"))
-          data["set"] = os.environ["BENCH_SET"]
-          data["fixer_model"] = os.environ["FIXER_MODEL"]
-          data["judge_model"] = os.environ["JUDGE_MODEL"]
-          json.dump(data, open(f"result-{os.environ['BENCH_SET']}.json", "w"),
+          merged = {
+              "set": os.environ["BENCH_SET"],
+              "fixer_model": os.environ["FIXER_MODEL"],
+              "judge_model": os.environ["JUDGE_MODEL"],
+              "fp": json.load(open("result-fp.json")),
+              "tp": json.load(open("result-tp.json")),
+          }
+          json.dump(merged,
+                    open(f"result-{os.environ['BENCH_SET']}.json", "w"),
                     indent=2)
           EOF
 
@@ -165,7 +178,8 @@ jobs:
           name: result-${{ matrix.set }}
           path: |
             result-${{ matrix.set }}.json
-            run.log
+            run-fp.log
+            run-tp.log
 
   report:
     needs: benchmark

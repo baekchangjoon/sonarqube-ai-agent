@@ -21,7 +21,7 @@ docker run --rm -e SONAR_HOST_URL=$SONAR_URL -e SONAR_TOKEN=$SONAR_TOKEN \
 
 스캔 후 트리아지를 돌리면, 이 프로젝트의 모든 이슈에 대한 정답은
 "오탐(skip)"입니다. `issues_skipped_as_fp / 32` 가 곧 재현율(recall)이고,
-[sample-java-project](../../sample-java-project)(실결함 26개)와 함께 돌리면
+[tp-corpus](../tp-corpus)(실결함 24개, 동일 룰 미러링)와 함께 돌리면
 정밀도까지 측정할 수 있습니다.
 
 ## Ground Truth Manifest (2026-06-07, SonarQube CE 26.5 실측)
