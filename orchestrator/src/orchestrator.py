@@ -459,8 +459,9 @@ class SonarQubeOrchestrator:
 
     def _get_source_context(self, issue: SonarIssue,
                             working_dir: str) -> str:
+        span = self._config.assessment.context_lines
         lines = self._sonar.get_source_lines(
-            issue.component, max(1, issue.line - 5), issue.line + 5,
+            issue.component, max(1, issue.line - span), issue.line + span,
         )
         if lines:
             return "\n".join(lines)
@@ -468,7 +469,7 @@ class SonarQubeOrchestrator:
         # back to the local checkout so harness-less judges (bedrock-api)
         # still see the code.
         return _local_source_context(working_dir, issue.file_path,
-                                     issue.line)
+                                     issue.line, span)
 
     def _invoke_agent(self, prompt: str, issue: SonarIssue,
                       source_context: str, working_dir: str) -> FixResult:
@@ -640,14 +641,14 @@ class SonarQubeOrchestrator:
 
 
 def _local_source_context(working_dir: str, file_path: str,
-                          line: int) -> str:
+                          line: int, span: int = 5) -> str:
     try:
         text = (Path(working_dir) / file_path).read_text()
     except OSError:
         return ""
     lines = text.splitlines()
-    start = max(0, line - 6)
-    return "\n".join(lines[start:line + 5])
+    start = max(0, line - span - 1)
+    return "\n".join(lines[start:line + span])
 
 
 def _limit(issues: list, max_issues: int) -> list:

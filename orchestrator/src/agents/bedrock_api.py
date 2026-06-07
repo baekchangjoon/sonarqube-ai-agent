@@ -57,6 +57,9 @@ class BedrockAPIAgent(LLMAgent):
     def supports_mcp(self) -> bool:
         return False
 
+    def supports_file_read(self) -> bool:
+        return False  # no tool harness — prompt-only judgments
+
     def name(self) -> str:
         return f"Bedrock Converse ({self._model_id})"
 

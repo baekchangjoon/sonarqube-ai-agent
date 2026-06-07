@@ -62,6 +62,20 @@ class LLMAgent(ABC):
     def supports_mcp(self) -> bool:
         """Whether this agent natively connects to MCP servers."""
 
+    def supports_file_read(self) -> bool:
+        """Whether judgment calls can read files beyond the prompt.
+
+        Harness-less backends (bedrock-api) override this with False so
+        judgment prompts do not offer impossible file access."""
+        return True
+
+    def _read_clause(self) -> str:
+        if self.supports_file_read():
+            return ("You may read files for more context, but DO NOT "
+                    "modify any file.\n")
+        return ("Decide based only on the information above — you have "
+                "no access to any files.\n")
+
     @abstractmethod
     def name(self) -> str:
         """Human-readable agent name for logging."""
@@ -146,8 +160,7 @@ class LLMAgent(ABC):
             f"Line: {line}\n\n"
             f"Applied change (unified diff):\n"
             f"```diff\n{diff}\n```\n\n"
-            f"You may read files for more context, but DO NOT modify "
-            f"any file.\n"
+            f"{self._read_clause()}"
             f"Respond with ONLY one JSON object as the last line:\n"
             f'{{"assessment": "APPROPRIATE" or "INAPPROPRIATE", '
             f'"confidence": <0.0-1.0>, "reason": "<one short sentence>"}}\n'
@@ -170,8 +183,7 @@ class LLMAgent(ABC):
             f"Source context (around line {line}):\n"
             f"```java\n{source_context}\n```\n\n"
             f"Assess whether the false-positive judgment is correct. "
-            f"You may read files for more context, but DO NOT modify "
-            f"any file.\n"
+            f"{self._read_clause()}"
             f"Respond with ONLY one JSON object as the last line:\n"
             f'{{"assessment": "AGREE_FALSE_POSITIVE" or "DISAGREE", '
             f'"confidence": <0.0-1.0>, "reason": "<one short sentence>"}}\n'
@@ -191,8 +203,7 @@ class LLMAgent(ABC):
             f"Line: {line}\n\n"
             f"Source context (around line {line}):\n"
             f"```java\n{source_context}\n```\n\n"
-            f"You may read files for more context, but DO NOT modify "
-            f"any file.\n"
+            f"{self._read_clause()}"
             f"Respond with ONLY one JSON object as the last line:\n"
             f'{{"verdict": "TRUE_POSITIVE" or "FALSE_POSITIVE", '
             f'"confidence": <0.0-1.0>, "reason": "<one short sentence>"}}\n'

@@ -90,6 +90,10 @@ class AssessmentConfig:
     #   "review": fix-with-FP-escape, then an independent LLM call
     #             assesses the fix or the FP claim (D)
     strategy: str = "none"
+    # Source lines shown around the issue line in triage/fix prompts.
+    # 5 keeps prompts small but can cut off class-level Javadoc; larger
+    # values give harness-less judges more of the surrounding intent.
+    context_lines: int = 5
 
 
 @dataclass
@@ -217,7 +221,10 @@ def _parse_assessment(raw: dict) -> AssessmentConfig:
             f"assessment.strategy must be 'none', 'triage' or 'review', "
             f"got: {strategy}"
         )
-    return AssessmentConfig(strategy=strategy)
+    return AssessmentConfig(
+        strategy=strategy,
+        context_lines=int((raw or {}).get("context_lines", 5)),
+    )
 
 
 def _resolve_env(value: str) -> str:
