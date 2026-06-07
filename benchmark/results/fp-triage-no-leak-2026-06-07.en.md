@@ -16,6 +16,49 @@ re-runs the same matrix after neutralizing the corpus
 - Answer sheets (manifests) isolated outside the corpus directories
   into `benchmark/docs/`
 
+## Terminology — recall and precision
+
+Confusion matrix with the judge's "positive" verdict defined as
+**"this is a false positive (skip)"**:
+
+| | Actually FP (fp-corpus, 32) | Actually a defect (tp-corpus, 24) |
+|---|---|---|
+| **Judge: FP (skip)** | Correct skips = 24 | **Wrong skips = 0** ← defect stays in the code |
+| **Judge: defect (fix)** | **Missed FPs = 8** ← healthy code gets edited | Correct fixes = 24 |
+
+- **Recall** = correct skips / all actual FPs = 24/32 = 75% — how
+  exhaustively existing false positives are caught. When low, FPs leak
+  into the fix stage: healthy code gets changed and fix cost accrues.
+- **Precision** = correct skips / all skips = 24/24 = 100% — how
+  trustworthy a skip verdict is. When low, real defects go unfixed
+  (this system's worst failure mode).
+- The two trade off. Because the failure costs are asymmetric
+  (a remaining defect ≫ an unnecessary fix), this system prioritizes
+  precision — "treat as a defect unless convinced" — and concedes
+  recall.
+
+## What the judge actually receives — input identity and determinism
+
+Mechanical facts of the triage pipeline (background for why all three
+sets produced the same result):
+
+- The judge input is a single `build_triage_prompt` template — rule ID,
+  message, file path, line, and an **11-line source context (issue line
+  ±5)**. All sets scan the same corpus, so per-issue prompts are
+  **byte-identical across sets**. The only difference is the judge
+  model — and opus-opus and sonnet-opus share the same Opus 4.6 judge.
+- The judge (`bedrock-api`) is a **single-shot** Converse call — no
+  tools, no multi-turn. If the model asks for more information, the
+  request is ignored; only the trailing JSON of the response is parsed.
+  The prompt line "You may read files for more context" is written for
+  the Read-capable claude-code judge and is unactionable for the
+  bedrock judge — effectively a closed-book exam.
+- Sampling temperature is at its default, but with the answer sheet
+  gone each verdict moved far from the decision boundary (clearly TP or
+  clearly FP), so sampling noise no longer flips them — the ±2-issue
+  run-to-run variance of rounds 1–2 came from borderline cases the
+  in-file answer text created.
+
 ## Results (run [27081624183](https://github.com/baekchangjoon/sonarqube-ai-agent/actions/runs/27081624183))
 
 | Set (fixer/judge) | Recall (round 3, isolated) | Recall (round 2, answer sheet) | Real defects wrongly skipped | Precision | Cost |
@@ -52,13 +95,21 @@ re-runs the same matrix after neutralizing the corpus
    24/24 fixes verified). The conservative default — lean TRUE_POSITIVE
    when intent alone is not convincing — holds: missed false positives
    cost fix tokens, missed real defects remain zero.
-4. **Nature of the 8 misses**: the three S3011 cases (setAccessible)
-   are defensible TP verdicts — the rule warns about the act itself, so
-   even by-design reflection can reasonably be flagged; the ground
-   truth label itself is a contested gray zone. By contrast Fp08
-   (S1854), Fp15 and Fp22 were missed despite explicit justification in
-   the comments — a signal that judges lack a standard for accepting
-   intent comments as evidence rather than excuses.
+4. **The 8 misses split into two kinds** (reconstructed from the exact
+   ±5-line window each judge received):
+   - **Cue never delivered (3)** — for all three S3011 cases, the class
+     Javadoc carrying the reflection-by-design justification falls
+     **outside** the window: the judge never saw the comment, it did
+     not ignore it — a structural limit of the context window. (The
+     ground-truth label is also contestable here, since the rule warns
+     about the setAccessible act itself.)
+   - **Cue delivered but overruled (5)** — "Public API since 1.0"
+     (S6213), the GC-pin inline comment (S1854), the cooperative-
+     shutdown comment (S2142), the read-only comment (S2386) and the
+     no-op listener Javadoc (S1186) were inside the window and still
+     judged TP — rule-level priors beat the intent statements. A signal
+     that judges lack a standard for accepting intent comments as
+     evidence rather than excuses.
 5. **Operational implication**: under realistic, no-answer-sheet
    conditions the ceiling for automatic FP skipping is ~75% on this
    corpus. The rest stays with human review — but since the bias is
