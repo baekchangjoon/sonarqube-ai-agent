@@ -1,3 +1,5 @@
+한국어 | **[English](README.en.md)**
+
 # TP Corpus — 실결함 판정 벤치마크용 라벨링 코퍼스
 
 LLM 트리아지(judge)의 **정밀도(precision)** 를 측정하기 위한 정답 세트입니다.

@@ -1,30 +1,32 @@
+한국어 | **[English](README.en.md)**
+
 # SonarQube AI Agent
 
-LLM-agnostic AI Agent Orchestrator for automated SonarQube defect remediation.
+SonarQube 결함 자동 수정을 위한 LLM-agnostic AI Agent Orchestrator.
 
-## Documents
+## 문서
 
-| Document | Description |
+| 문서 | 설명 |
 |----------|-------------|
-| [Governance Blueprint](docs/sonarqube_ai_agent_governance_blueprint.md) | RACI matrix, ownership model, operational process |
-| [Implementation Architecture](docs/ai_agent_implementation_architecture.md) | MCP Server, ephemeral project workflow, LLM abstraction |
+| [거버넌스 청사진](docs/sonarqube_ai_agent_governance_blueprint.md) | RACI 매트릭스, 소유권 모델, 운영 프로세스 |
+| [구현 아키텍처](docs/ai_agent_implementation_architecture.md) | MCP Server, 임시(ephemeral) 프로젝트 워크플로, LLM 추상화 |
 
-## Prerequisites
+## 사전 요구사항
 
-- Docker Engine 20.10+ ([install](https://docs.docker.com/engine/install/))
-- Python 3.9+ with `pip`
-- ~4 GB free RAM (SonarQube + PostgreSQL + scanner containers)
-- Internet access (for pulling Docker images on first run)
+- Docker Engine 20.10+ ([설치](https://docs.docker.com/engine/install/))
+- `pip`가 포함된 Python 3.9+
+- 여유 RAM 약 4 GB (SonarQube + PostgreSQL + 스캐너 컨테이너)
+- 인터넷 접속 (최초 실행 시 Docker 이미지 pull)
 
-### LLM Agent CLI Tools (at least one required)
+### LLM Agent CLI 도구 (최소 하나 필요)
 
-| Agent | Install | Auth | Verified Version |
+| Agent | 설치 | 인증 | 검증된 버전 |
 |-------|---------|------|-----------------|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `npm i -g @anthropic-ai/claude-code` | `claude` (interactive first run) | >= 2.1.x |
-| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `npm i -g @google/gemini-cli` | `gemini` (interactive first run) | >= 0.30.x |
-| [Cursor Agent](https://docs.cursor.com/agent) | Bundled with Cursor IDE | Cursor login | >= 2026.03.x |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `npm i -g @anthropic-ai/claude-code` | `claude` (최초 1회 대화형 실행) | >= 2.1.x |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `npm i -g @google/gemini-cli` | `gemini` (최초 1회 대화형 실행) | >= 0.30.x |
+| [Cursor Agent](https://docs.cursor.com/agent) | Cursor IDE에 번들 | Cursor 로그인 | >= 2026.03.x |
 
-## Architecture
+## 아키텍처
 
 ```
 sonarqube-ai-agent/
@@ -86,9 +88,9 @@ sonarqube-ai-agent/
 └── e2e-fix-test/ ───────── (generated) E2E fix validation workspace
 ```
 
-## Quick Start
+## 빠른 시작
 
-### Step 1 — Infrastructure
+### Step 1 — 인프라
 
 ```bash
 # Copy .env.example to .env (edit if needed)
@@ -107,7 +109,7 @@ cp .env.example .env
 ./scripts/04-verify-api.sh
 ```
 
-### Step 2 — Orchestrator Setup
+### Step 2 — Orchestrator 설정
 
 ```bash
 cd orchestrator
@@ -117,7 +119,7 @@ pip install -r requirements.txt
 python -m src.main summary
 ```
 
-### Step 3 — Run Modes
+### Step 3 — 실행 모드
 
 ```bash
 # Mode 1: PR Pre-merge — PR scan + AI fix + verification + PR comment
@@ -142,7 +144,7 @@ python -m src.main nightly-batch \
 python -m src.main summary --project-key sonarqube-agent-test
 ```
 
-Each mode prints a JSON result:
+각 모드는 JSON 결과를 출력한다:
 
 ```json
 {
@@ -159,127 +161,127 @@ Each mode prints a JSON result:
 }
 ```
 
-### Cleanup
+### 정리
 
 ```bash
 ./scripts/99-teardown.sh          # stop containers (keep data)
 ./scripts/99-teardown.sh --clean  # stop + delete all data
 ```
 
-## Fix Pipeline
+## 수정 파이프라인
 
-All three modes share the same core pipeline:
+세 모드 모두 동일한 핵심 파이프라인을 공유한다:
 
 ```
 scan → issues → FP assessment → LLM fix (in place) → rebuild + re-scan → verified fixes → deliver
 ```
 
-1. **Scan** — sonar-scanner via Docker. Mode 1 supports two PR analysis
-   strategies (`scanner.pr_mode`):
-   - `ephemeral` — temp project per PR (CE workaround, no plugin needed)
-   - `native` — `sonar.pullrequest.*` params (requires the community
-     branch/PR plugin); the PR slot shows only issues new vs. the base
-2. **FP assessment** (`assessment.strategy`) — mitigates static-analysis
-   false positives before code is touched:
-   - `none` — fix every issue
-   - `triage` — a read-only LLM call judges each issue first;
-     FALSE_POSITIVE → skip + report with confidence
-   - `review` — the fix prompt has an FP escape hatch; afterwards an
-     **independent** LLM call reviews the applied diff (or the FP claim)
-     and provides the confidence, avoiding self-assessment bias.
-     Unparseable/failed judgments fall back to "fix it" (the safe default).
+1. **스캔(Scan)** — Docker를 통한 sonar-scanner. Mode 1은 두 가지 PR 분석
+   전략을 지원한다 (`scanner.pr_mode`):
+   - `ephemeral` — PR마다 임시 프로젝트 (CE 우회책, 플러그인 불필요)
+   - `native` — `sonar.pullrequest.*` 파라미터 (community
+     branch/PR 플러그인 필요); PR 슬롯에는 base 대비 신규 이슈만 표시
+2. **FP 평가(FP assessment)** (`assessment.strategy`) — 코드를 건드리기
+   전에 정적 분석 오탐을 완화한다:
+   - `none` — 모든 이슈를 수정
+   - `triage` — read-only LLM 호출이 각 이슈를 먼저 판정;
+     FALSE_POSITIVE → skip + confidence와 함께 리포트
+   - `review` — 수정 프롬프트에 FP escape hatch가 있고, 이후
+     **독립적인** LLM 호출이 적용된 diff(또는 FP 주장)를 리뷰하여
+     confidence를 제공한다 — 자기 평가 편향을 회피. 파싱 불가/실패한
+     판정은 "수정한다"(안전 기본값)로 fallback한다.
 
-   Judgment calls need no file-editing harness, so they can run on a
-   different backend/model than the fixer (`agent.judge_type` /
-   `agent.judge_model`) — e.g. fixer = Sonnet via Claude Code, judge =
-   Opus 4.6 via Bedrock Converse. When SonarQube cannot serve an
-   issue's source (files new in a PR), the judge prompt falls back to
-   the local checkout.
-3. **Fix** — the agent CLI edits files in the working dir directly
+   판정(judgment) 호출은 파일 편집 harness가 필요 없으므로, 수정
+   에이전트(fixer)와 다른 백엔드/모델에서 실행할 수 있다
+   (`agent.judge_type` / `agent.judge_model`) — 예: fixer = Claude Code의
+   Sonnet, judge = Bedrock Converse의 Opus 4.6. SonarQube가 이슈의
+   소스를 제공하지 못할 때(PR에서 새로 추가된 파일), 판정 프롬프트는
+   로컬 checkout으로 fallback한다.
+3. **수정(Fix)** — 에이전트 CLI가 작업 디렉터리의 파일을 직접 편집한다
    (`claude -p --permission-mode acceptEdits`, `gemini --yolo`, ...).
-   Issues are processed sequentially so later fixes see earlier ones.
-4. **Verify** — rebuild (`scanner.rebuild_command`), re-scan, then count
-   a fix as verified **only if its issue key is no longer open** on the
-   server. LLM self-reporting is never trusted for verification.
-5. **Deliver** — verified fixes only:
-   - Mode 1: PR comment (`delivery: comment`) and/or a new commit pushed
-     to the PR branch (`push_fix_commit: true`)
-   - Mode 2/3: a Fix PR (`create_fix_pr: true` + `fix_pr.repo`)
+   이슈는 순차적으로 처리되어 이후 수정이 이전 수정을 본다.
+4. **검증(Verify)** — rebuild(`scanner.rebuild_command`) 후 re-scan하고,
+   해당 이슈 키가 서버에서 **더 이상 open이 아닐 때에만** 수정을 검증된
+   것으로 집계한다. 검증에 LLM의 자기 보고는 절대 신뢰하지 않는다.
+5. **전달(Deliver)** — 검증된 수정만:
+   - Mode 1: PR comment(`delivery: comment`) 및/또는 PR 브랜치에 push되는
+     새 커밋(`push_fix_commit: true`)
+   - Mode 2/3: Fix PR(`create_fix_pr: true` + `fix_pr.repo`)
 
-Reports, commit messages, and Fix PR bodies include per-fix and per-skip
-confidences, labelled `LLM-assessed` (uncalibrated — treat as a triage
-priority signal, not a probability). Reports and the result JSON also
-carry an **LLM Usage** breakdown — tokens and cost per role (fixer /
-judge) and a run total. Claude Code reports its own cost
-(`--output-format json`); Bedrock cost is estimated from Converse usage
-via `agents/pricing.py` (unknown models report tokens only).
+리포트, 커밋 메시지, Fix PR 본문에는 수정별·skip별 confidence가 포함되며
+`LLM-assessed`로 라벨링된다(보정되지 않음 — 확률이 아니라 트리아지(판정)
+우선순위 신호로 다룰 것). 리포트와 결과 JSON에는 **LLM Usage** 분석도
+담긴다 — 역할별(fixer / judge) 토큰과 비용, 그리고 실행 총계. Claude Code는
+자신의 비용을 보고하고(`--output-format json`), Bedrock 비용은
+`agents/pricing.py`를 통해 Converse usage로부터 추정된다(미지의 모델은
+토큰만 보고).
 
-## Configuration Reference (config.yml)
+## 설정 레퍼런스 (config.yml)
 
-| Key | Values | Description |
+| 키 | 값 | 설명 |
 |-----|--------|-------------|
-| `agent.type` | `claude-code` `gemini-cli` `kiro-cli` `bedrock-api` | Fix agent backend (`bedrock-api` has no harness — judgment/suggestion only) |
-| `agent.judge_type` / `judge_model` | agent type / model id | Separate backend/model for judgment calls (FP triage, fix review); unset = fix agent |
-| `sonarqube.url` / `token` | `${ENV}` supported | SonarQube server + auth |
-| `sonarqube.main_project_key` | string | Main branch project |
-| `scanner.pr_mode` | `ephemeral` / `native` | PR analysis strategy (Mode 1) |
-| `scanner.rebuild_command` | shell string | Run in project dir before each scan (empty = skip) |
-| `assessment.strategy` | `none` / `triage` / `review` | False-positive screening (see Fix Pipeline) |
-| `modes.pr_premerge.delivery` | `comment` / `log` | Post analysis report to the PR or log only |
-| `modes.pr_premerge.push_fix_commit` | bool | Push verified fixes as a commit to the PR branch |
-| `modes.*.max_issues_per_run` | int | Cap per run, `0` = unlimited |
-| `modes.post_merge.create_fix_pr` | bool + `fix_pr.repo`/`base` | Open a Fix PR with verified fixes |
-| `modes.nightly_batch.create_fix_pr` | bool + `fix_pr.repo`/`base` | Same for nightly batch |
-| `modes.nightly_batch.severity_filter` | list | Issue severities to select |
+| `agent.type` | `claude-code` `gemini-cli` `kiro-cli` `bedrock-api` | 수정 에이전트 백엔드 (`bedrock-api`는 harness가 없음 — 판정/제안 전용) |
+| `agent.judge_type` / `judge_model` | agent type / model id | 판정 호출(FP 트리아지, 수정 리뷰)용 별도 백엔드/모델; 미설정 시 수정 에이전트 |
+| `sonarqube.url` / `token` | `${ENV}` 지원 | SonarQube 서버 + 인증 |
+| `sonarqube.main_project_key` | string | 메인 브랜치 프로젝트 |
+| `scanner.pr_mode` | `ephemeral` / `native` | PR 분석 전략 (Mode 1) |
+| `scanner.rebuild_command` | shell string | 각 스캔 전 프로젝트 디렉터리에서 실행 (빈 값 = skip) |
+| `assessment.strategy` | `none` / `triage` / `review` | 오탐 스크리닝 (수정 파이프라인 참고) |
+| `modes.pr_premerge.delivery` | `comment` / `log` | 분석 리포트를 PR에 게시하거나 log만 |
+| `modes.pr_premerge.push_fix_commit` | bool | 검증된 수정을 커밋으로 PR 브랜치에 push |
+| `modes.*.max_issues_per_run` | int | 실행당 상한, `0` = 무제한 |
+| `modes.post_merge.create_fix_pr` | bool + `fix_pr.repo`/`base` | 검증된 수정으로 Fix PR 생성 |
+| `modes.nightly_batch.create_fix_pr` | bool + `fix_pr.repo`/`base` | nightly batch에 대해 동일 |
+| `modes.nightly_batch.severity_filter` | list | 선택할 이슈 심각도 |
 
-Git prerequisites: `push_fix_commit` needs `--project-dir` to be a git
-checkout of the PR branch; `create_fix_pr` needs a git clone with an
-authenticated `origin` and the `gh` CLI.
+Git 사전 요구사항: `push_fix_commit`은 `--project-dir`가 PR 브랜치의 git
+checkout이어야 하고, `create_fix_pr`은 인증된 `origin`을 가진 git clone과
+`gh` CLI가 필요하다.
 
-## Environment Variables
+## 환경 변수
 
-The `.env` file is auto-generated by `02-setup-project.sh`.
-You can also create it manually from `.env.example`:
+`.env` 파일은 `02-setup-project.sh`가 자동 생성한다.
+`.env.example`로부터 수동으로 만들 수도 있다:
 
-| Variable | Default | Description |
+| 변수 | 기본값 | 설명 |
 |----------|---------|-------------|
-| `SONAR_URL` | `http://localhost:9000` | SonarQube server URL |
-| `SONAR_TOKEN` | *(generated)* | SonarQube user token |
-| `SONAR_PROJECT_KEY` | `sonarqube-agent-test` | Main project key |
+| `SONAR_URL` | `http://localhost:9000` | SonarQube 서버 URL |
+| `SONAR_TOKEN` | *(생성됨)* | SonarQube 사용자 토큰 |
+| `SONAR_PROJECT_KEY` | `sonarqube-agent-test` | 메인 프로젝트 키 |
 
-## Sample Project: Intentional Defects
+## 샘플 프로젝트: 의도된 결함
 
-The sample Java project contains **26 intentional defects** verified by SonarQube scan:
+샘플 Java 프로젝트에는 SonarQube 스캔으로 검증된 **26개의 의도된 결함**이 들어 있다:
 
-| File | Rule | Severity | Description | Count |
+| 파일 | 룰 | 심각도 | 설명 | 개수 |
 |------|------|----------|-------------|-------|
-| `UserService.java` | S6437 | BLOCKER | Hardcoded password in `DB_PASSWORD` | 1 |
-| `UserService.java` | S2095 | BLOCKER | Resource leak — Connection/Statement not closed | 2 |
-| `UserService.java` | S2259 | MAJOR | NullPointerException risk on `result` | 1 |
-| `UserService.java` | S1192 | CRITICAL | Duplicated string literal instead of constant | 1 |
-| `UserService.java` | S2447 | CRITICAL | Returning `null` for `Boolean` type | 1 |
-| `UserService.java` | S1186 | CRITICAL | Empty method body without explanation | 1 |
-| `UserService.java` | S106 | MAJOR | `System.out` instead of logger | 1 |
-| `UserService.java` | S1068 | MAJOR | Unused private fields | 2 |
-| `UserService.java` | S1854 | MAJOR | Useless assignment to local variable | 2 |
-| `UserService.java` | S1643 | MINOR | String concatenation in loop | 2 |
-| `UserService.java` | S1481 | MINOR | Unused local variable | 1 |
-| `OrderProcessor.java` | S2095 | BLOCKER | Resource leak — FileReader not closed | 1 |
-| `OrderProcessor.java` | S3776 | CRITICAL | Cognitive complexity too high | 1 |
-| `OrderProcessor.java` | S106 | MAJOR | `System.out` instead of logger | 2 |
-| `OrderProcessor.java` | S1104 | MINOR | Public mutable fields | 2 |
-| `OrderProcessor.java` | S2184 | MINOR | Integer division cast truncation | 1 |
-| `SecurityUtils.java` | S2119 | CRITICAL | `new Random()` created each call | 1 |
-| `SecurityUtils.java` | S1118 | MAJOR | Utility class missing private constructor | 1 |
-| `SecurityUtils.java` | S107 | MAJOR | Method with too many parameters (8 > 7) | 1 |
-| `SecurityUtils.java` | S1172 | MAJOR | Unused method parameters | 1 |
+| `UserService.java` | S6437 | BLOCKER | `DB_PASSWORD`에 하드코딩된 비밀번호 | 1 |
+| `UserService.java` | S2095 | BLOCKER | 리소스 누수 — Connection/Statement 미종료 | 2 |
+| `UserService.java` | S2259 | MAJOR | `result`에 대한 NullPointerException 위험 | 1 |
+| `UserService.java` | S1192 | CRITICAL | 상수 대신 중복된 문자열 리터럴 | 1 |
+| `UserService.java` | S2447 | CRITICAL | `Boolean` 타입에 `null` 반환 | 1 |
+| `UserService.java` | S1186 | CRITICAL | 설명 없는 빈 메서드 본문 | 1 |
+| `UserService.java` | S106 | MAJOR | logger 대신 `System.out` | 1 |
+| `UserService.java` | S1068 | MAJOR | 미사용 private 필드 | 2 |
+| `UserService.java` | S1854 | MAJOR | 지역 변수에 대한 무의미한 대입 | 2 |
+| `UserService.java` | S1643 | MINOR | 루프 내 문자열 연결 | 2 |
+| `UserService.java` | S1481 | MINOR | 미사용 지역 변수 | 1 |
+| `OrderProcessor.java` | S2095 | BLOCKER | 리소스 누수 — FileReader 미종료 | 1 |
+| `OrderProcessor.java` | S3776 | CRITICAL | 인지 복잡도 과다 | 1 |
+| `OrderProcessor.java` | S106 | MAJOR | logger 대신 `System.out` | 2 |
+| `OrderProcessor.java` | S1104 | MINOR | public mutable 필드 | 2 |
+| `OrderProcessor.java` | S2184 | MINOR | 정수 나눗셈 cast 절삭 | 1 |
+| `SecurityUtils.java` | S2119 | CRITICAL | 호출마다 생성되는 `new Random()` | 1 |
+| `SecurityUtils.java` | S1118 | MAJOR | private 생성자가 없는 유틸리티 클래스 | 1 |
+| `SecurityUtils.java` | S107 | MAJOR | 파라미터가 너무 많은 메서드 (8 > 7) | 1 |
+| `SecurityUtils.java` | S1172 | MAJOR | 미사용 메서드 파라미터 | 1 |
 
-Test coverage is intentionally low (~5%) with only one test file.
+테스트 커버리지는 테스트 파일 하나만으로 의도적으로 낮다(~5%).
 
-## LLM Agent CLI Reference
+## LLM Agent CLI 레퍼런스
 
-Each agent requires **non-interactive (headless) mode** for Orchestrator integration.
-Below are the verified CLI invocations:
+각 에이전트는 Orchestrator 통합을 위해 **비대화형(headless) 모드**가 필요하다.
+아래는 검증된 CLI 호출이다:
 
 ### Claude Code
 
@@ -292,13 +294,13 @@ claude -p \
   < /dev/null
 ```
 
-| Flag | Purpose |
+| 플래그 | 용도 |
 |------|---------|
-| `-p` / `--print` | Headless mode — print response and exit |
-| `--output-format json` | JSON envelope with `result`, `usage`, `total_cost_usd` |
-| `--permission-mode acceptEdits` | Auto-approve file edits without prompting |
-| `--allowedTools "Read,Write,Edit"` | Restrict to file operation tools only |
-| `< /dev/null` | **Required** — prevents 3-second stdin wait |
+| `-p` / `--print` | Headless 모드 — 응답 출력 후 종료 |
+| `--output-format json` | `result`, `usage`, `total_cost_usd`를 담은 JSON envelope |
+| `--permission-mode acceptEdits` | 프롬프트 없이 파일 편집 자동 승인 |
+| `--allowedTools "Read,Write,Edit"` | 파일 작업 도구로만 제한 |
+| `< /dev/null` | **필수** — 3초 stdin 대기 방지 |
 
 ### Gemini CLI
 
@@ -306,10 +308,10 @@ claude -p \
 gemini --yolo -p "Fix SonarQube issue S3776 in OrderProcessor.java ..."
 ```
 
-| Flag | Purpose |
+| 플래그 | 용도 |
 |------|---------|
-| `-p` / `--prompt` | Headless mode — run prompt and exit |
-| `--yolo` | Auto-approve all tool calls (file edits, shell commands) |
+| `-p` / `--prompt` | Headless 모드 — 프롬프트 실행 후 종료 |
+| `--yolo` | 모든 도구 호출 자동 승인 (파일 편집, 셸 명령) |
 
 ### Cursor Agent
 
@@ -317,15 +319,15 @@ gemini --yolo -p "Fix SonarQube issue S3776 in OrderProcessor.java ..."
 agent -p --yolo --trust "Fix SonarQube issue S1104 in OrderProcessor.java ..."
 ```
 
-| Flag | Purpose |
+| 플래그 | 용도 |
 |------|---------|
-| `-p` / `--print` | Headless mode — print response and exit |
-| `--yolo` | Auto-approve all tool calls |
-| `--trust` | Trust workspace without prompting |
+| `-p` / `--print` | Headless 모드 — 응답 출력 후 종료 |
+| `--yolo` | 모든 도구 호출 자동 승인 |
+| `--trust` | 프롬프트 없이 workspace 신뢰 |
 
-## E2E Fix Validation Workflow
+## E2E 수정 검증 워크플로
 
-Validates the full cycle: SonarQube scan → LLM fix → re-scan → zero issues.
+전체 사이클을 검증한다: SonarQube scan → LLM fix → re-scan → 이슈 0개.
 
 ```bash
 # 1. Copy sample project to isolated workspace
@@ -371,19 +373,19 @@ curl -sf -u admin:admin1 -X POST \
   "$SONAR_URL/api/projects/delete?project=e2e-fix-test"
 ```
 
-### Verified E2E Results (2026-03-21)
+### 검증된 E2E 결과 (2026-03-21)
 
-| Agent | Target File | Issues | Fixed | Residual |
+| Agent | 대상 파일 | 이슈 | 수정 | 잔여 |
 |-------|-------------|--------|-------|----------|
 | Gemini CLI `--yolo` | SecurityUtils.java | 4 | 3 | 1 |
 | Cursor Agent `--yolo --trust` | UserService.java | 15 | 14 | 1 |
-| Claude Code `acceptEdits` | Residual 2 issues | 2 | 2 | 0 |
+| Claude Code `acceptEdits` | 잔여 2개 이슈 | 2 | 2 | 0 |
 | Gemini CLI `--yolo` | OrderProcessor.java | 7 | 7 | 0 |
-| **Total** | **3 files** | **26** | **26** | **0** |
+| **합계** | **3개 파일** | **26** | **26** | **0** |
 
-## Ephemeral Project Workflow
+## 임시(ephemeral) 프로젝트 워크플로
 
-Script `06-scan-ephemeral.sh` demonstrates the PR pre-merge analysis pattern:
+`06-scan-ephemeral.sh` 스크립트는 PR pre-merge 분석 패턴을 시연한다:
 
 ```
 1. Create ephemeral project: myproject-pr-{number}
@@ -393,16 +395,15 @@ Script `06-scan-ephemeral.sh` demonstrates the PR pre-merge analysis pattern:
 5. Delete ephemeral project
 ```
 
-This validates that Community Edition can analyze PR code independently
-without corrupting the main branch analysis.
+이는 Community Edition이 메인 브랜치 분석을 오염시키지 않고 PR 코드를
+독립적으로 분석할 수 있음을 검증한다.
 
-## MCP Server Integration
+## MCP Server 통합
 
-After running `05-test-mcp-server.sh`, use the printed configuration to connect
-your LLM tool (Claude Code, Cursor, Gemini CLI, Kiro CLI) to SonarQube
-via the MCP Server.
+`05-test-mcp-server.sh` 실행 후, 출력된 설정을 사용해 LLM 도구(Claude Code,
+Cursor, Gemini CLI, Kiro CLI)를 MCP Server를 통해 SonarQube에 연결한다.
 
-## Running Tests
+## 테스트 실행
 
 ```bash
 cd orchestrator
@@ -415,9 +416,9 @@ pytest tests/ -m "not integration"
 SONAR_URL=http://localhost:9000 SONAR_TOKEN=<token> pytest tests/ -v
 ```
 
-## Ports
+## 포트
 
-| Service | Port | URL |
+| 서비스 | 포트 | URL |
 |---------|------|-----|
 | SonarQube | 9000 | http://localhost:9000 |
 | PostgreSQL | 5433 | localhost:5433 |

@@ -1,3 +1,5 @@
+한국어 | **[English](fp-triage-comparison-2026-06-07.en.md)**
+
 # FP 트리아지 벤치마크 — 모델 세트 비교 (2026-06-07)
 
 - 대상: `benchmark/fp-corpus` — 이슈 32개, 전부 ground truth = FALSE_POSITIVE

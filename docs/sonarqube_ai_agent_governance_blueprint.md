@@ -1,3 +1,5 @@
+한국어 | **[English](sonarqube_ai_agent_governance_blueprint.en.md)**
+
 # SonarQube + AI Agent Governance Blueprint
 ## Enterprise-Grade Defect Resolution, Test Code Ownership & Operational Process
 

@@ -1,58 +1,58 @@
-한국어 | **[English](ai_agent_implementation_architecture.en.md)**
+**[한국어](ai_agent_implementation_architecture.md)** | English
 
 # AI Agent Implementation Architecture
-## SonarQube Community Edition + MCP Server + LLM-Agnostic Agent 설계
+## SonarQube Community Edition + MCP Server + LLM-Agnostic Agent Design
 
 ---
 
-## 1. 제약 조건 정리
+## 1. Constraints
 
-| 항목 | 현황 | 영향 |
+| Item | Status | Impact |
 |------|------|------|
-| SonarQube Edition | **Community Build** | PR 분석, 브랜치 분석, AI CodeFix 불가 ([CE 기능 범위](https://www.sonarsource.com/open-source-editions/sonarqube-community-edition/)) |
-| 코드베이스 | Java 1.x → **Java 17** AI 모더나이제이션 완료 | AI 전환 코드 위에 외주사가 추가 개발 중 |
-| 개발 주체 | **외주 계약 업체** | 코드 오너십, 품질 계약 조건 필요 |
-| 조직 권장 AI 도구 | **AWS Kiro** | 기본 도구이나, 다른 LLM으로 교체 가능해야 함 |
-| CI 환경 Kiro CLI | **인증 불확실** | CI 자동화 시 대안 경로 필요 |
+| SonarQube Edition | **Community Build** | PR analysis, branch analysis, AI CodeFix unavailable ([CE feature scope](https://www.sonarsource.com/open-source-editions/sonarqube-community-edition/)) |
+| Codebase | Java 1.x → **Java 17** AI modernization complete | A contractor is developing on top of the AI-converted code |
+| Development owner | **Outsourced contractor** | Requires code ownership and quality contract terms |
+| Org-recommended AI tool | **AWS Kiro** | Default tool, but must be swappable for other LLMs |
+| CI environment Kiro CLI | **Authentication uncertain** | Alternative path needed for CI automation |
 
-### 설계 결정 사항
+### Design Decisions
 
-| 결정 | 선택 (설계 시점) | 구현 결과 (2026-06-07) |
+| Decision | Choice (at design time) | Implementation result (2026-06-07) |
 |------|------|------|
-| MCP Server 사용 여부 | 사용 | **변경: REST 직접 호출** — 오케스트레이터의 판정·검증 루프는 결정적 REST가 단순하고 테스트 용이. MCP는 대화형 에이전트 연동용으로 유지 (§4.3, `05-test-mcp-server.sh`) |
-| LLM 도구 교체 가능성 | 필수 | **구현 + 확장**: 4개 백엔드 + 역할 분리(수정/판정 에이전트 별도 라우팅) |
-| PR 수준 분석 | 임시 프로젝트 키 방식 | **구현 + 확장**: `scanner.pr_mode = ephemeral \| native` — branch/PR plugin이 설치된 서버에선 네이티브 `sonar.pullrequest.*` 사용 가능 |
+| Whether to use an MCP Server | Use | **Changed: direct REST calls** — the orchestrator's triage/verification loop is simpler and easier to test with deterministic REST. MCP is retained for conversational agent integration (§4.3, `05-test-mcp-server.sh`) |
+| LLM tool swappability | Required | **Implemented + extended**: 4 backends + role separation (separate routing for fixer/judge agents) |
+| PR-level analysis | Ephemeral project key approach | **Implemented + extended**: `scanner.pr_mode = ephemeral \| native` — native `sonar.pullrequest.*` can be used on servers with the branch/PR plugin installed |
 
-### 설계 대비 구현 변경 요약 (v3.0, 2026-06-07)
+### Design-vs-Implementation Change Summary (v3.0, 2026-06-07)
 
-본 문서의 v2.0까지는 사전 설계였고, 이후 구현 과정에서 다음이 확정·추가되었다.
-상세 코드는 [`orchestrator/`](../orchestrator)와 [README](../README.md) 참조.
+Everything through v2.0 of this document was up-front design; the following were confirmed/added during subsequent implementation.
+See [`orchestrator/`](../orchestrator) and the [README](../README.md) for detailed code.
 
-| 영역 | 설계 (v2.0) | 구현 (v3.0) |
+| Area | Design (v2.0) | Implementation (v3.0) |
 |------|------------|------------|
-| SonarQube 연동 | MCP Server 경유 | **REST 직접** (`sonarqube_client.py`) — MCP는 대화형 용도로만 |
-| 수정 검증 | Phase 2 예정 | **구현**: rebuild → 재스캔 → 이슈 키 폐쇄 확인 (LLM 자기 보고 불신) |
-| 결과 전달 | Phase별 택1 | **모두 구현**: PR 코멘트(Mode 1) + PR 브랜치 커밋 push(Mode 1) + Fix PR(Mode 2/3) |
-| 오탐(FP) 대응 | 설계에 없음 | **`assessment.strategy`**: `triage`(사전 판정) / `review`(수정+독립 사후 리뷰) — 판정·근거·confidence를 리포트 |
-| 에이전트 역할 분리 | 단일 에이전트 | **수정(fixer)/판정(judge) 분리** (`agent.judge_type/judge_model`) — 판정은 하네스 불필요라 Bedrock Converse 단발 호출 가능 |
-| Bedrock 백엔드 | invoke_model (Claude 전용) | **Converse API** (모델 불문: Claude/Nova) + usage 수집 |
-| 비용 계측 | 설계에 없음 | run당 **LLM Usage**(토큰/비용, 역할별) — 결과 JSON·리포트에 포함 |
-| 오탐 벤치마크 | 설계에 없음 | [`benchmark/fp-corpus`](../benchmark/fp-corpus) — 22사례/32이슈 전부 ground-truth FP, CE 발화 검증 완료 |
-| 테스트 코드 생성 | 수정과 함께 생성 | **범위 제외** — 수정 프롬프트는 "해당 이슈만 in-place 수정"으로 한정 (FixResult.test_code 필드는 잔존하나 미사용) |
+| SonarQube integration | Via MCP Server | **Direct REST** (`sonarqube_client.py`) — MCP for conversational use only |
+| Fix verification | Planned for Phase 2 | **Implemented**: rebuild → rescan → confirm issue key closed (do not trust LLM self-reporting) |
+| Result delivery | One of, per phase | **All implemented**: PR comment (Mode 1) + commit push to PR branch (Mode 1) + Fix PR (Mode 2/3) |
+| False positive (FP) handling | Not in design | **`assessment.strategy`**: `triage` (pre-judgment) / `review` (fix + independent post-review) — reports verdict, reason, and confidence |
+| Agent role separation | Single agent | **Separate fixer/judge** (`agent.judge_type/judge_model`) — judging needs no harness, so a single Bedrock Converse call is possible |
+| Bedrock backend | invoke_model (Claude only) | **Converse API** (any model: Claude/Nova) + usage collection |
+| Cost metering | Not in design | Per-run **LLM Usage** (tokens/cost, by role) — included in result JSON and report |
+| FP benchmark | Not in design | [`benchmark/fp-corpus`](../benchmark/fp-corpus) — 22 cases/32 issues, all ground-truth FP, CE firing verified |
+| Test code generation | Generated alongside fix | **Out of scope** — the fix prompt is limited to "in-place fix of only that issue" (the FixResult.test_code field remains but is unused) |
 
 ---
 
-## 2. 핵심 기술 발견
+## 2. Key Technical Findings
 
-### 2.1 Community Edition에서 PR 브랜치 분석이 가능한가?
+### 2.1 Is PR branch analysis possible on the Community Edition?
 
-**가능하다. 단, 주의가 필요하다.**
+**Yes, but it requires care.**
 
-`sonar-scanner`는 현재 디렉토리의 코드를 분석한다. PR 브랜치를 checkout하고 실행하면 해당 코드를 분석하는 것은 맞다. **하지만** Community Edition에서 결과 저장에 제약이 있다:
+`sonar-scanner` analyzes the code in the current directory. If you check out a PR branch and run it, it does indeed analyze that code. **However**, the Community Edition has constraints on storing results:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Community Edition의 sonar-scanner 동작 원리                 │
+│  How sonar-scanner works in the Community Edition            │
 │                                                             │
 │  sonar-scanner는 "현재 디렉토리의 파일"을 분석한다.           │
 │  Git 브랜치와 무관하게, 파일 시스템에 있는 코드를 읽는다.     │
@@ -74,11 +74,11 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 해결책: 임시 프로젝트 키 (Ephemeral Project Key)
+### 2.2 Solution: Ephemeral Project Key
 
-Community Edition 공식 워크어라운드 ([StackOverflow 참조](https://stackoverflow.com/questions/72536550/master-and-develop-branch-analysis-in-sonarqube-community-edition)):
+Official Community Edition workaround ([StackOverflow reference](https://stackoverflow.com/questions/72536550/master-and-develop-branch-analysis-in-sonarqube-community-edition)):
 
-**PR마다 고유한 임시 프로젝트 키를 사용하면, main 브랜치 분석을 오염시키지 않고 PR 코드를 독립적으로 분석할 수 있다.**
+**If you use a unique ephemeral project key per PR, you can analyze the PR code independently without polluting the main branch analysis.**
 
 ```bash
 # main 브랜치 분석 (상시)
@@ -117,21 +117,21 @@ sonar-scanner \
 └─────────────────────────────────────────────────────────────┘
 ```
 
-이 방식의 장단점:
+Pros and cons of this approach:
 
-| 장점 | 단점 |
+| Pros | Cons |
 |------|------|
-| Community Edition 순정 상태 사용 | PR마다 임시 프로젝트 생성/삭제 오버헤드 |
-| main 분석 오염 없음 | Quality Profile을 임시 프로젝트에도 적용 필요 |
-| 여러 PR 동시 분석 가능 | 임시 프로젝트 정리 로직 구현 필요 |
-| 플러그인 설치 불필요 | 대시보드에 임시 프로젝트가 보임 (정리 전) |
+| Uses the Community Edition stock | Per-PR overhead of creating/deleting an ephemeral project |
+| No pollution of main analysis | Quality Profile must also be applied to ephemeral projects |
+| Multiple PRs can be analyzed concurrently | Ephemeral project cleanup logic must be implemented |
+| No plugin installation required | Ephemeral projects appear on the dashboard (until cleaned up) |
 
 ### 2.3 SonarQube MCP Server
 
-SonarQube MCP Server는 AI Agent와 SonarQube 사이의 **표준 브릿지**다.
+The SonarQube MCP Server is the **standard bridge** between an AI Agent and SonarQube.
 
-[Community Build 공식 호환 문서](https://docs.sonarsource.com/sonarqube-community-build/extension-guide/sonarqube-mcp-server) |
-[MCP Server 제품 페이지](https://www.sonarsource.com/products/sonarqube/mcp-server/) |
+[Community Build official compatibility doc](https://docs.sonarsource.com/sonarqube-community-build/extension-guide/sonarqube-mcp-server) |
+[MCP Server product page](https://www.sonarsource.com/products/sonarqube/mcp-server/) |
 [Docker Hub](https://hub.docker.com/mcp/server/sonarqube/overview)
 
 ```
@@ -165,18 +165,20 @@ SonarQube MCP Server는 AI Agent와 SonarQube 사이의 **표준 브릿지**다.
 └─────────────────────────────────────────────────────────────┘
 ```
 
-> **구현 노트 (v3.0)**: 위 MCP Server 구상은 "사람이 LLM CLI와 대화하며
-> SonarQube를 조회"하는 시나리오에는 그대로 유효하다. 그러나 **오케스트레이터의
-> 자동 파이프라인은 MCP를 거치지 않고 REST를 직접 호출**하도록 구현했다 —
-> 판정·검증 루프는 입력과 출력이 고정된 결정적 호출이라 MCP 계층이 주는
-> 유연성보다 단순성·테스트 용이성이 더 중요했기 때문이다. LLM 교체 용이성은
-> MCP 대신 `agents/` 추상화 계층(LLMAgent ABC + factory)이 담당한다.
+> **Implementation note (v3.0)**: The MCP Server concept above remains valid as-is
+> for the scenario where "a human queries SonarQube while conversing with an LLM
+> CLI." However, **the orchestrator's automated pipeline was implemented to call
+> REST directly without going through MCP** — because the triage/verification loop
+> consists of deterministic calls with fixed inputs and outputs, simplicity and
+> testability mattered more than the flexibility the MCP layer provides. LLM
+> swappability is handled by the `agents/` abstraction layer (LLMAgent ABC +
+> factory) instead of MCP.
 
-### 2.4 LLM 도구 교체 가능성
+### 2.4 LLM Tool Swappability
 
-MCP(Model Context Protocol)는 **LLM-Agnostic 표준 프로토콜**이다. SonarQube MCP Server를 사용하면, LLM 도구 교체가 설정 변경만으로 가능하다.
+MCP (Model Context Protocol) is an **LLM-Agnostic standard protocol**. Using the SonarQube MCP Server, swapping the LLM tool is possible with a configuration change only.
 
-[SonarSource 공식 지원 MCP 클라이언트 목록](https://www.sonarsource.com/products/sonarqube/mcp-server/):
+[List of MCP clients officially supported by SonarSource](https://www.sonarsource.com/products/sonarqube/mcp-server/):
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -205,9 +207,9 @@ MCP(Model Context Protocol)는 **LLM-Agnostic 표준 프로토콜**이다. Sonar
 
 ---
 
-## 3. 확정 아키텍처
+## 3. Finalized Architecture
 
-### 3.1 전체 구조도
+### 3.1 Overall Structure Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -285,17 +287,18 @@ MCP(Model Context Protocol)는 **LLM-Agnostic 표준 프로토콜**이다. Sonar
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-> **구현 노트 (v3.0)**: 위 구조도에서 "MCP Protocol / SonarQube MCP Server"
-> 구간은 최종 구현에서 **Orchestrator → SonarQube REST 직접 호출**로 대체되었다.
-> 또한 LLM Agent Interface 아래에 **judge(판정) 역할**이 추가되어, FP 트리아지와
-> 수정 리뷰는 fixer와 다른 백엔드/모델(예: 수정=Sonnet via Claude Code,
-> 판정=Opus via Bedrock Converse)로 라우팅할 수 있다.
+> **Implementation note (v3.0)**: In the diagram above, the "MCP Protocol /
+> SonarQube MCP Server" segment was replaced in the final implementation by
+> **Orchestrator → SonarQube REST direct calls**. In addition, a **judge role**
+> was added below the LLM Agent Interface, so that FP triage and fix review can be
+> routed to a different backend/model than the fixer (e.g., fix = Sonnet via Claude
+> Code, judge = Opus via Bedrock Converse).
 
-### 3.2 세 가지 실행 모드 상세
+### 3.2 The Three Execution Modes in Detail
 
-#### Mode 1: PR Pre-merge (핵심 모드)
+#### Mode 1: PR Pre-merge (core mode)
 
-**외주 개발자가 PR을 올린 시점에 — 머지 전에 — 결함을 탐지하고 수정을 제안한다.**
+**At the moment the contractor opens a PR — before merge — detect defects and propose fixes.**
 
 ```
  외주 개발자: PR #142 Open
@@ -345,7 +348,7 @@ MCP(Model Context Protocol)는 **LLM-Agnostic 표준 프로토콜**이다. Sonar
  │  5. 결과 전달 (택 1)                                   │
  │     A) PR에 리뷰 코멘트로 수정 제안 (Phase 1)          │
  │     B) PR 브랜치에 Fix 커밋 push (Phase 2)             │
- │     C) 별도 Fix PR 생성 (Phase 3)                      │
+ │     C) 별도 Fix PR 생성 (Phase 3)                     │
  │                                                        │
  │  6. 임시 프로젝트 정리 (PR Close 시)                   │
  │     DELETE /api/projects/delete?project=myproject-pr-142│
@@ -356,14 +359,15 @@ MCP(Model Context Protocol)는 **LLM-Agnostic 표준 프로토콜**이다. Sonar
  외주 개발자: AI 수정 제안 리뷰 → 반영 → 머지
 ```
 
-> **구현 노트 (v3.0)**: 위 흐름의 4(Sandbox 검증)는 "rebuild → sonar-scanner
-> 재실행 → 원래 이슈 키가 닫혔는지 확인"으로 구현되었고, 5의 전달 방식은
-> A(PR 코멘트)와 B(PR 브랜치 Fix 커밋 push)가 Mode 1에, C(별도 Fix PR)가
-> Mode 2/3에 구현되어 config로 각각 토글한다. 또한 2와 3 사이에
-> **FP 트리아지 단계**가 추가되었다 — judge가 오탐으로 판정한 이슈는 수정을
-> 건너뛰고 근거·confidence와 함께 리포트된다.
+> **Implementation note (v3.0)**: Step 4 (Sandbox verification) above was
+> implemented as "rebuild → rerun sonar-scanner → confirm the original issue key is
+> closed," and for delivery in step 5, A (PR comment) and B (Fix commit push to PR
+> branch) are implemented for Mode 1, and C (separate Fix PR) for Mode 2/3, each
+> toggled by config. In addition, an **FP triage step** was added between steps 2
+> and 3 — issues the judge rules as false positives skip the fix and are reported
+> with reason and confidence.
 
-#### Mode 2: Post-merge (보완 모드)
+#### Mode 2: Post-merge (supplementary mode)
 
 ```
  PR #142 머지 → main 브랜치
@@ -386,9 +390,9 @@ MCP(Model Context Protocol)는 **LLM-Agnostic 표준 프로토콜**이다. Sonar
  개발자: Fix PR 리뷰 → 머지
 ```
 
-Mode 1에서 놓친 이슈를 잡는 **안전망** 역할이다. Mode 1이 잘 동작하면 여기서 잡히는 이슈는 점점 줄어든다.
+It serves as a **safety net** that catches issues missed in Mode 1. As Mode 1 works well, the issues caught here gradually decrease.
 
-#### Mode 3: Nightly Batch (기술 부채 감소)
+#### Mode 3: Nightly Batch (technical debt reduction)
 
 ```
  Cron: 매일 02:00 AM
@@ -404,13 +408,13 @@ Mode 1에서 놓친 이슈를 잡는 **안전망** 역할이다. Mode 1이 잘 �
    6. Fix PR 생성 (라벨: "tech-debt-reduction")
 ```
 
-AI 모더나이제이션으로 전환된 코드의 **레거시 기술 부채를 점진적으로 해소**한다.
+It **gradually eliminates the legacy technical debt** in the code converted via AI modernization.
 
 ---
 
-## 4. Orchestrator 설계: LLM 추상화 인터페이스
+## 4. Orchestrator Design: LLM Abstraction Interface
 
-### 4.1 전체 클래스 구조
+### 4.1 Overall Class Structure
 
 ```python
 """
@@ -457,14 +461,14 @@ class FixResult:
     test_code: str
     explanation: str = ""
     errors: list = field(default_factory=list)
-    fix_confidence: float = None  # LLM-assessed (review 전략: 독립 리뷰어 값)
+    fix_confidence: float = None  # LLM-assessed (review strategy: independent reviewer's value)
 
 
 @dataclass
 class TriageResult:
-    """오탐 판정 결과 (FP 트리아지 / 수정 리뷰)."""
-    verdict: str       # TRUE_POSITIVE | FALSE_POSITIVE (리뷰: 평가 문자열)
-    confidence: float  # 0.0-1.0, LLM 자가 보고 (비캘리브레이션)
+    """False positive verdict result (FP triage / fix review)."""
+    verdict: str       # TRUE_POSITIVE | FALSE_POSITIVE (review: assessment string)
+    confidence: float  # 0.0-1.0, LLM self-reported (uncalibrated)
     reason: str = ""
 
 
@@ -678,7 +682,7 @@ class SonarQubeOrchestrator:
     # Fix PR 자동 생성은 Phase 2 고도화 시 구현 예정.
 ```
 
-### 4.2 설정 파일
+### 4.2 Configuration File
 
 ```yaml
 # config.yml (v3.0 — 구현 기준)
@@ -738,9 +742,9 @@ modes:
     fix_pr: { repo: "", base: "main" }
 ```
 
-### 4.3 LLM별 MCP Server 설정
+### 4.3 Per-LLM MCP Server Configuration
 
-각 LLM 도구에서 SonarQube MCP Server를 연동하는 구체적 설정:
+Concrete configuration for integrating the SonarQube MCP Server in each LLM tool:
 
 #### Kiro CLI
 
@@ -762,7 +766,7 @@ modes:
 }
 ```
 
-[Kiro CLI Agent 설정 문서](https://kiro.dev/docs/cli/reference/cli-commands/#kiro-cli-agent)
+[Kiro CLI Agent configuration doc](https://kiro.dev/docs/cli/reference/cli-commands/#kiro-cli-agent)
 
 #### Claude Code
 
@@ -783,7 +787,7 @@ modes:
 }
 ```
 
-[Claude Code + SonarQube MCP 연동 문서](https://www.sonarsource.com/blog/claude-code-sonarqube-mcp-building-an-autonomous-code-review-workflow/)
+[Claude Code + SonarQube MCP integration doc](https://www.sonarsource.com/blog/claude-code-sonarqube-mcp-building-an-autonomous-code-review-workflow/)
 
 #### Gemini CLI
 
@@ -804,15 +808,15 @@ modes:
 }
 ```
 
-[Gemini CLI + SonarQube 연동 페이지](https://www.sonarsource.com/integrations/google/gemini-cli/)
+[Gemini CLI + SonarQube integration page](https://www.sonarsource.com/integrations/google/gemini-cli/)
 
-**MCP Server Docker 이미지가 동일하다는 것에 주목 — 설정 파일의 위치와 형식만 다르다.**
+**Note that the MCP Server Docker image is identical — only the location and format of the configuration file differ.**
 
 ---
 
-## 5. CI 파이프라인 설계
+## 5. CI Pipeline Design
 
-### 5.1 PR Pre-merge 파이프라인 (GitHub Actions)
+### 5.1 PR Pre-merge Pipeline (GitHub Actions)
 
 ```yaml
 # .github/workflows/sonar-pr-analysis.yml
@@ -854,7 +858,7 @@ jobs:
             }'
 ```
 
-### 5.2 Post-merge 파이프라인
+### 5.2 Post-merge Pipeline
 
 ```yaml
 # .github/workflows/sonar-main-analysis.yml
@@ -883,7 +887,7 @@ jobs:
         # SonarQube Webhook이 자동으로 Orchestrator에 알림
 ```
 
-### 5.3 PR Close 시 임시 프로젝트 정리
+### 5.3 Ephemeral Project Cleanup on PR Close
 
 ```yaml
 # .github/workflows/sonar-pr-cleanup.yml
@@ -910,11 +914,11 @@ jobs:
 
 ---
 
-## 6. SonarQube New Code Period 설정
+## 6. SonarQube New Code Period Configuration
 
-AI 모더나이제이션 코드를 **베이스라인**으로 설정하고, 외주사의 신규 코드만 Quality Gate 대상으로 삼는다.
+Set the AI modernization code as the **baseline**, and make only the contractor's new code subject to the Quality Gate.
 
-[New Code 설정 문서](https://docs.sonarsource.com/sonarqube-server/project-administration/configuring-new-code-calculation)
+[New Code configuration doc](https://docs.sonarsource.com/sonarqube-server/project-administration/configuring-new-code-calculation)
 
 ```
  설정 경로:
@@ -933,11 +937,11 @@ AI 모더나이제이션 코드를 **베이스라인**으로 설정하고, 외�
 
 ---
 
-## 7. 외주 계약 품질 조항
+## 7. Outsourcing Contract Quality Clauses
 
-[SonarSource 외주 리스크 관리](https://sonarsource.com/solutions/reduce-outsourcing-software-development-risk) |
-[Pangea.ai 2026 외주 계약 가이드](https://pangea.ai/resources/software-outsourcing-contracts-what-to-include-and-how-to-negotiate) |
-[GenieAI 계약 조항 가이드](https://www.genieai.co/blog/essential-contract-clauses-for-custom-software-development-outsourcing-agreements)
+[SonarSource outsourcing risk management](https://sonarsource.com/solutions/reduce-outsourcing-software-development-risk) |
+[Pangea.ai 2026 outsourcing contract guide](https://pangea.ai/resources/software-outsourcing-contracts-what-to-include-and-how-to-negotiate) |
+[GenieAI contract clauses guide](https://www.genieai.co/blog/essential-contract-clauses-for-custom-software-development-outsourcing-agreements)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -962,29 +966,31 @@ AI 모더나이제이션 코드를 **베이스라인**으로 설정하고, 외�
 
 ---
 
-## 8. 코드 레이어별 결함 오너십
+## 8. Defect Ownership by Code Layer
 
 [Enterprise AI Coding Policy 2026](https://aidevdayindia.org/blogs/best-ai-mode-checker/enterprise-ai-coding-policy-template-2026.html) |
 [SonarQube Clean as You Code](https://docs.sonarsource.com/sonarqube-server/latest/core-concepts/clean-as-you-code/introduction/) |
 [IBM ScarfBench](https://www.ibm.com/new/announcements/scarfbench-a-public-benchmark-for-java-framework-migration)
 
-| 코드 레이어 | 생성 주체 | 결함 오너 | 근거 |
+| Code layer | Producer | Defect owner | Basis |
 |-------------|----------|-----------|------|
-| 원본 레거시 (Java 1.x) | 과거 개발팀 | 해당 없음 (폐기) | - |
-| AI 모더나이제이션 코드 (Java 17) | AI Agent | 발주사 (내부) | 수용 테스트 통과 후 귀속 |
-| 외주사 신규 개발 코드 | 외주사 | **외주사** (하자보증 기간 내) | 계약 조건 |
-| AI Agent 자동 수정 코드 | AI Agent | **머지한 사람** (Golden Rule) | [Enterprise AI Policy 2026](https://aidevdayindia.org/blogs/best-ai-mode-checker/enterprise-ai-coding-policy-template-2026.html) |
+| Original legacy (Java 1.x) | Past dev team | N/A (deprecated) | - |
+| AI modernization code (Java 17) | AI Agent | Client (internal) | Attributed after acceptance test passes |
+| Contractor's new development code | Contractor | **Contractor** (within warranty period) | Contract terms |
+| AI Agent auto-fix code | AI Agent | **Whoever merges** (Golden Rule) | [Enterprise AI Policy 2026](https://aidevdayindia.org/blogs/best-ai-mode-checker/enterprise-ai-coding-policy-template-2026.html) |
 
 ---
 
-## 9. 단계별 구현 로드맵
+## 9. Phased Implementation Roadmap
 
-> **진행 현황 (2026-06-07)**: Phase 0 완료(단, MCP 연동 검증은 대화형 용도로만
-> 유효 — 파이프라인은 REST 직접), Phase 1 완료, Phase 2 완료(검증 루프·Fix PR·
-> Nightly·전 LLM 구현체) + 설계에 없던 확장(FP 트리아지, judge 분리, 비용 계측,
-> FP 코퍼스) 추가. Phase 3(전체 프로젝트 확대·대시보드·SLA 연동)는 미착수.
+> **Progress (2026-06-07)**: Phase 0 complete (but MCP integration verification is
+> valid for conversational use only — the pipeline uses REST directly), Phase 1
+> complete, Phase 2 complete (verification loop, Fix PR, Nightly, all LLM
+> implementations) plus extensions not in the design (FP triage, judge separation,
+> cost metering, FP corpus) added. Phase 3 (project-wide expansion, dashboard, SLA
+> integration) not started.
 
-### Phase 0: 인프라 검증 (1-2주)
+### Phase 0: Infrastructure Verification (1-2 weeks)
 
 ```
 검증 항목:
@@ -1006,7 +1012,7 @@ AI 모더나이제이션 코드를 **베이스라인**으로 설정하고, 외�
    → Kiro → Claude Code → Gemini CLI 순환 테스트
 ```
 
-### Phase 1: MVP — PR 코멘트 모드 (2-4주)
+### Phase 1: MVP — PR Comment Mode (2-4 weeks)
 
 ```
 구현:
@@ -1029,7 +1035,7 @@ AI 모더나이제이션 코드를 **베이스라인**으로 설정하고, 외�
 산출물: PR에 결함 목록 + AI 수정 제안 코멘트
 ```
 
-### Phase 2: Fix PR 자동화 (2-4주)
+### Phase 2: Fix PR Automation (2-4 weeks)
 
 ```
 추가:
@@ -1041,7 +1047,7 @@ AI 모더나이제이션 코드를 **베이스라인**으로 설정하고, 외�
 산출물: 자동 Fix PR + 야간 기술 부채 감소
 ```
 
-### Phase 3: 확대 및 최적화 (4-8주)
+### Phase 3: Scale-out and Optimization (4-8 weeks)
 
 ```
 추가:
@@ -1053,48 +1059,48 @@ AI 모더나이제이션 코드를 **베이스라인**으로 설정하고, 외�
 
 ---
 
-## 10. 낙관/비관 시나리오
+## 10. Optimistic / Pessimistic Scenarios
 
-### 낙관
+### Optimistic
 
-- PR 머지 전 결함의 **80%+** 를 Mode 1에서 사전 탐지
-- 외주사 Quality Gate 통과율 **70% → 95%**
-- LLM 도구 자유 교체 → 비용/성능 최적화 가능
-- 임시 프로젝트 방식으로 Community Edition 제약 완전 우회
+- Detect **80%+** of defects ahead of merge in Mode 1
+- Contractor Quality Gate pass rate **70% → 95%**
+- Free LLM tool swapping → enables cost/performance optimization
+- Fully bypass Community Edition constraints via the ephemeral project approach
 
-### 비관
+### Pessimistic
 
-- 임시 프로젝트 대량 생성 시 SonarQube 서버 부하 ([CE 리소스 제한](https://docs.sonarsource.com/sonarqube-community-build/))
-- 임시 프로젝트 정리 실패 시 대시보드 오염
-- MCP Server가 Community Edition에서 일부 도구 제한 가능성 (search_dependency_risks는 Enterprise만 지원 — [Tools 문서](https://docs.sonarsource.com/sonarqube-mcp-server/tools))
-- Presidio 보고: 66% 조직이 AI Agent 실험 중이나 **11%만 프로덕션 배포 성공** ([참조](https://www.presidio.com/blogs/agentic-application-modernization-reality/))
+- SonarQube server load when many ephemeral projects are created ([CE resource limits](https://docs.sonarsource.com/sonarqube-community-build/))
+- Dashboard pollution when ephemeral project cleanup fails
+- Possibility that the MCP Server restricts some tools on the Community Edition (search_dependency_risks is Enterprise-only — [Tools doc](https://docs.sonarsource.com/sonarqube-mcp-server/tools))
+- Presidio report: 66% of organizations are experimenting with AI Agents but **only 11% successfully deployed to production** ([reference](https://www.presidio.com/blogs/agentic-application-modernization-reality/))
 
 ---
 
 ## 11. References
 
-| # | 출처 | URL |
+| # | Source | URL |
 |---|------|-----|
-| 1 | SonarQube CE — MCP Server 호환 | https://docs.sonarsource.com/sonarqube-community-build/extension-guide/sonarqube-mcp-server |
+| 1 | SonarQube CE — MCP Server compatibility | https://docs.sonarsource.com/sonarqube-community-build/extension-guide/sonarqube-mcp-server |
 | 2 | SonarQube MCP Server — Tools | https://docs.sonarsource.com/sonarqube-mcp-server/tools |
 | 3 | SonarQube MCP Server — Quickstart | https://docs.sonarsource.com/sonarqube-mcp-server/quickstart-guide |
 | 4 | SonarQube MCP Server — Docker | https://hub.docker.com/mcp/server/sonarqube/overview |
-| 5 | SonarSource — MCP Server 제품 | https://www.sonarsource.com/products/sonarqube/mcp-server/ |
+| 5 | SonarSource — MCP Server product | https://www.sonarsource.com/products/sonarqube/mcp-server/ |
 | 6 | SonarSource — Claude Code + MCP | https://www.sonarsource.com/blog/claude-code-sonarqube-mcp-building-an-autonomous-code-review-workflow/ |
 | 7 | SonarSource — PR-to-green | https://www.sonarsource.com/blog/automating-quality-gate-success-with-claude-opus-4-6-and-sonarqube-mcp/ |
 | 8 | SonarSource — Architecture of Trust | https://www.sonarsource.com/blog/join-the-sonarqube-remediation-agent-beta/ |
-| 9 | SonarSource — 외주 리스크 관리 | https://sonarsource.com/solutions/reduce-outsourcing-software-development-risk |
-| 10 | SonarQube — Webhook 설정 | https://docs.sonarsource.com/sonarqube-community-build/project-administration/webhooks |
+| 9 | SonarSource — outsourcing risk management | https://sonarsource.com/solutions/reduce-outsourcing-software-development-risk |
+| 10 | SonarQube — Webhook configuration | https://docs.sonarsource.com/sonarqube-community-build/project-administration/webhooks |
 | 11 | SonarQube — New Code Period | https://docs.sonarsource.com/sonarqube-server/project-administration/configuring-new-code-calculation |
 | 12 | SonarQube — API Issues Search | https://next.sonarqube.com/sonarqube/web_api/api/issues/search |
-| 13 | CE 브랜치 제약 (StackOverflow) | https://stackoverflow.com/questions/69803754 |
-| 14 | CE 브랜치 워크어라운드 (StackOverflow) | https://stackoverflow.com/questions/72536550 |
+| 13 | CE branch constraint (StackOverflow) | https://stackoverflow.com/questions/69803754 |
+| 14 | CE branch workaround (StackOverflow) | https://stackoverflow.com/questions/72536550 |
 | 15 | Community Branch Plugin | https://github.com/mc1arke/sonarqube-community-branch-plugin |
 | 16 | Kiro CLI — Commands | https://kiro.dev/docs/cli/reference/cli-commands |
 | 17 | Kiro CLI — Authentication | https://kiro.dev/docs/cli/authentication/ |
 | 18 | setup-kiro-action | https://github.com/clouatre-labs/setup-kiro-action |
-| 19 | Kiro CLI — Headless 이슈 | https://github.com/kirodotdev/Kiro/issues/4398 |
-| 20 | SonarSource — Gemini CLI 연동 | https://www.sonarsource.com/integrations/google/gemini-cli/ |
+| 19 | Kiro CLI — Headless issue | https://github.com/kirodotdev/Kiro/issues/4398 |
+| 20 | SonarSource — Gemini CLI integration | https://www.sonarsource.com/integrations/google/gemini-cli/ |
 | 21 | Enterprise AI Policy 2026 | https://aidevdayindia.org/blogs/best-ai-mode-checker/enterprise-ai-coding-policy-template-2026.html |
 | 22 | IBM ScarfBench | https://www.ibm.com/new/announcements/scarfbench-a-public-benchmark-for-java-framework-migration |
 | 23 | Presidio — Agentic Modernization | https://www.presidio.com/blogs/agentic-application-modernization-reality/ |
@@ -1104,8 +1110,8 @@ AI 모더나이제이션 코드를 **베이스라인**으로 설정하고, 외�
 | 27 | SonarQube — Clean as You Code | https://docs.sonarsource.com/sonarqube-server/latest/core-concepts/clean-as-you-code/introduction/ |
 | 28 | Pixeebot + SonarQube | https://github.com/pixee/upload-tool-results-action |
 | 29 | SonarQube — Branch Analysis | https://docs.sonarsource.com/sonarqube-server/2025.4/analyzing-source-code/branch-analysis/setting-up-the-branch-analysis |
-| 30 | SonarSource — 외주 코드 품질 전략 | https://www.sonarsource.com/resources/library/strategies-for-managing-code-quality-in-outsourced-software-development/ |
+| 30 | SonarSource — outsourced code quality strategy | https://www.sonarsource.com/resources/library/strategies-for-managing-code-quality-in-outsourced-software-development/ |
 
 ---
 
-*Document Version: 3.0 | Created: 2026-03-21 | Updated: 2026-06-07 (구현 반영) | Classification: Internal*
+*Document Version: 3.0 | Created: 2026-03-21 | Updated: 2026-06-07 (implementation reflected) | Classification: Internal*

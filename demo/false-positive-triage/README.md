@@ -1,3 +1,5 @@
+한국어 | **[English](README.en.md)**
+
 # False Positive Triage Demo — 룰 vs LLM
 
 정적분석 경고의 진위("진짜 결함이냐 오탐이냐")는 **의도와 맥락**의 문제라서
