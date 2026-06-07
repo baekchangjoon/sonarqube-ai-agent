@@ -3,7 +3,7 @@
 # FP 트리아지 벤치마크 — 재현율 + 정밀도 (2026-06-07, 2차)
 
 [1차(재현율만)](fp-triage-comparison-2026-06-07.md)에 이어, 새로 추가된
-[tp-corpus](../tp-corpus)(실결함 24개, fp-corpus 룰 미러링)로
+[tp-corpus](../docs/tp-corpus-manifest.md)(실결함 24개, fp-corpus 룰 미러링)로
 **정밀도(실결함을 오탐으로 오판해 스킵하는 비율)** 를 함께 측정했다.
 
 - fp-corpus: 이슈 32개, 전부 ground truth = FALSE_POSITIVE — 스킵이 정답 (재현율)

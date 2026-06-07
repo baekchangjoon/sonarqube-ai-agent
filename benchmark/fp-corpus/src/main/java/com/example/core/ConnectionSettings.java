@@ -1,13 +1,10 @@
-package com.example.fp;
+package com.example.core;
 
 /**
- * FP-21 — expected: java:S107 (too many parameters).
- * Why it is a false positive: the 8-parameter constructor is PRIVATE
- * and called from exactly one place — the Builder that exists to spare
- * users from those parameters. The rule's readability concern is
- * already solved by the pattern it flags.
+ * Immutable connection settings. Constructed exclusively through
+ * {@link Builder}; the constructor is not part of the public surface.
  */
-public class Fp21BuilderCtor {
+public class ConnectionSettings {
 
     private final String host;
     private final int port;
@@ -18,9 +15,9 @@ public class Fp21BuilderCtor {
     private final boolean tls;
     private final boolean retry;
 
-    private Fp21BuilderCtor(String host, int port, String user, String db,
-                            int poolSize, int timeoutMs, boolean tls,
-                            boolean retry) {
+    private ConnectionSettings(String host, int port, String user, String db,
+                               int poolSize, int timeoutMs, boolean tls,
+                               boolean retry) {
         this.host = host;
         this.port = port;
         this.user = user;
@@ -52,8 +49,8 @@ public class Fp21BuilderCtor {
             return this;
         }
 
-        public Fp21BuilderCtor build() {
-            return new Fp21BuilderCtor(host, port, user, db, poolSize,
+        public ConnectionSettings build() {
+            return new ConnectionSettings(host, port, user, db, poolSize,
                     timeoutMs, tls, retry);
         }
     }

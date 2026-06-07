@@ -1,15 +1,14 @@
-package com.example.fp;
+package com.example.core;
 
 import java.lang.reflect.Field;
 import java.util.StringJoiner;
 
 /**
- * FP-02 — expected: java:S1068 (unused private fields).
- * Why it is a false positive: the fields are consumed generically by the
- * reflection-based serializer below (Gson/Jackson-style data binding);
- * no direct reference exists, but every field is used at runtime.
+ * Wire payload for order submissions. Serialized field-by-field via
+ * reflection by {@link #toJson()} (data-binding style), so fields and
+ * JSON keys stay in lockstep.
  */
-public class Fp02SerializedDto {
+public class OrderPayload {
 
     private String orderId = "o-1";
     private int quantity = 2;
@@ -17,7 +16,7 @@ public class Fp02SerializedDto {
 
     public String toJson() throws ReflectiveOperationException {
         StringJoiner json = new StringJoiner(",", "{", "}");
-        for (Field f : Fp02SerializedDto.class.getDeclaredFields()) {
+        for (Field f : OrderPayload.class.getDeclaredFields()) {
             f.setAccessible(true);
             json.add("\"" + f.getName() + "\":\"" + f.get(this) + "\"");
         }

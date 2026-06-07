@@ -1,21 +1,18 @@
-package com.example.fp;
+package com.example.core;
 
 import java.util.Iterator;
 import java.util.List;
 
 /**
- * FP-14 — expected: java:S2272 (next() should throw
- * NoSuchElementException).
- * Why it is a false positive: this iterator is infinite by contract
- * (round-robin over a non-empty list); hasNext() always returns true,
- * so the exhausted-iterator case cannot occur.
+ * Cycles forever over a non-empty list of upstream endpoints — the
+ * load balancer calls {@code next()} once per request, indefinitely.
  */
-public class Fp14CyclicIterator implements Iterator<String> {
+public class RoundRobinIterator implements Iterator<String> {
 
     private final List<String> items;
     private int index;
 
-    public Fp14CyclicIterator(List<String> items) {
+    public RoundRobinIterator(List<String> items) {
         if (items.isEmpty()) {
             throw new IllegalArgumentException("items must not be empty");
         }
@@ -24,7 +21,7 @@ public class Fp14CyclicIterator implements Iterator<String> {
 
     @Override
     public boolean hasNext() {
-        return true; // infinite by design
+        return true; // a round-robin cycle has no end
     }
 
     @Override

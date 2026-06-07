@@ -6,14 +6,13 @@
 
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.example</groupId>
-    <artifactId>fp-corpus</artifactId>
+    <artifactId>core-services</artifactId>
     <version>1.0.0</version>
     <packaging>jar</packaging>
 
-    <name>SonarQube AI Agent Test Project</name>
+    <name>Core Platform Service Modules</name>
     <description>
-        Intentionally flawed Java 17 project for testing SonarQube AI Agent.
-        Contains bugs, vulnerabilities, code smells, and missing test coverage.
+        Shared service-layer modules of the platform core.
     </description>
 
     <properties>

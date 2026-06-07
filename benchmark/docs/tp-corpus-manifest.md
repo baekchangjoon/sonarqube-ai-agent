@@ -1,28 +1,29 @@
-한국어 | **[English](README.en.md)**
+한국어 | **[English](tp-corpus-manifest.en.md)**
 
-# TP Corpus — 실결함 판정 벤치마크용 라벨링 코퍼스
+# TP Corpus Manifest — 실결함 판정 벤치마크 답안지
 
-LLM 트리아지(judge)의 **정밀도(precision)** 를 측정하기 위한 정답 세트입니다.
-[fp-corpus](../fp-corpus)(전부 오탐)와 짝을 이루며, 이쪽은 **전부 ground
-truth = TRUE_POSITIVE** — 여기서 스킵되는 이슈는 "실결함을 오탐으로
-오판해 놓친" 건수입니다.
+[`benchmark/tp-corpus`](../tp-corpus)의 ground truth 해설지입니다.
+18케이스 / **24이슈, 전부 ground truth = TRUE_POSITIVE** —
+여기서 스킵되는 이슈는 "실결함을 오탐으로 오판해 놓친" 건수입니다.
+
+> 답안지는 분석 대상 파일과 격리하기 위해 코퍼스 밖(이 문서)에만
+> 둡니다 — [fp-corpus manifest](fp-corpus-manifest.md)의 격리 원칙 참조.
 
 설계 원칙:
 
 - **룰 미러링**: fp-corpus에서 발화 검증된 룰과 같은 룰을 사용해, judge가
   룰 종류만으로 답을 맞힐 수 없게 한다 (예: S2068 — fp는 공개 dev 기본값,
   tp는 운영 DB 비밀번호).
-- **정답 미유출**: 주석은 코드의 *의도*만 서술한다 (fp-corpus가 "왜
-  오탐인가"를 주석에 적는 것과 대칭으로, 이쪽은 "이건 결함"이라는 단서를
-  절대 적지 않는다). 의도 서술이 곧 결함의 증거가 되도록 작성했다
+- **정답 미유출**: 주석은 코드의 *의도*만 서술하고, "이건 결함"이라는
+  단서를 절대 적지 않는다. 의도 서술이 곧 결함의 증거가 되도록 작성
   (예: "리트라이는 MAX_ATTEMPTS까지" 라는 Javadoc + 카운터 미증가 루프).
-- **자연스러운 명명**: `Fp01...` 식 케이스 접두사 대신 실코드 같은
-  클래스명을 사용한다 (파일명이 정답을 누설하지 않도록). 케이스 번호는
-  이 README의 manifest에만 존재한다.
+- **자연스러운 명명**: 실코드 같은 클래스명을 사용한다. 케이스 번호는
+  이 manifest에만 존재한다.
 
-## 사용법
+## 사용법 (빌드 + 스캔)
 
 ```bash
+cd benchmark/tp-corpus
 docker run --rm -v "$(pwd)":/project -w /project \
   maven:3.9-eclipse-temurin-17 mvn -q clean compile test-compile
 docker run --rm -e SONAR_HOST_URL=$SONAR_URL -e SONAR_TOKEN=$SONAR_TOKEN \
@@ -39,8 +40,6 @@ docker run --rm -e SONAR_HOST_URL=$SONAR_URL -e SONAR_TOKEN=$SONAR_TOKEN \
 - 정밀도(precision) = fp-corpus에서 스킵 / (fp-corpus 스킵 + tp-corpus 스킵)
 
 ## Ground Truth Manifest (2026-06-07, SonarQube CE 26.5 실측)
-
-18케이스 / **24이슈, 전부 ground truth = TRUE_POSITIVE**.
 
 | # | 파일 | 발화 룰 (라인) | 결함 요약 (왜 실결함인가) | 미러 |
 |---|------|---------------|--------------------------|------|
@@ -64,7 +63,7 @@ docker run --rm -e SONAR_HOST_URL=$SONAR_URL -e SONAR_TOKEN=$SONAR_TOKEN \
 | 18 | AuditLogReader | S2095@23,24 | Connection/PreparedStatement 미반납 — 커넥션 풀 고갈 | — |
 
 보조 파일: `CatalogCache`(#16의 대상 클래스, 의도된 이슈 없음),
-`CorpusPlaceholder`(스캐너의 src/test/java 하드코딩 대응).
+`Placeholder`(스캐너의 src/test/java 하드코딩 대응).
 
 ## 작성 과정에서의 발견 (분석기가 잡지 못한 패턴)
 

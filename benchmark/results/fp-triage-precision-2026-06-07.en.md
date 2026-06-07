@@ -3,7 +3,7 @@
 # FP Triage Benchmark — Recall + Precision (2026-06-07, round 2)
 
 Following [round 1 (recall only)](fp-triage-comparison-2026-06-07.en.md),
-this run adds the new [tp-corpus](../tp-corpus/README.en.md) (24 real
+this run adds the new [tp-corpus](../docs/tp-corpus-manifest.en.md) (24 real
 defects mirroring the fp-corpus rules) to also measure **precision (how
 often real defects are wrongly skipped as false positives)**.
 
