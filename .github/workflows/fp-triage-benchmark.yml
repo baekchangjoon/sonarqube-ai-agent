@@ -85,7 +85,7 @@ jobs:
         working-directory: benchmark/fp-corpus
         run: |
           docker run --rm -v "$PWD":/project -w /project \
-            maven:3.9-eclipse-temurin-17 mvn -q clean compile
+            maven:3.9-eclipse-temurin-17 mvn -q clean compile test-compile
 
       - name: Write benchmark config
         env:
@@ -112,7 +112,7 @@ jobs:
             pr_mode: "ephemeral"
             rebuild_command: >-
               docker run --rm -v "\$(pwd)":/project -w /project
-              maven:3.9-eclipse-temurin-17 mvn -q clean compile
+              maven:3.9-eclipse-temurin-17 mvn -q clean compile test-compile
           assessment:
             strategy: "triage"
           modes:
