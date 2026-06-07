@@ -1,0 +1,190 @@
+# FP 트리아지 벤치마크 — 수정/판정 모델 세트별 오탐 검출률·비용 비교
+#
+# benchmark/fp-corpus(32개 이슈, 전부 ground-truth FP)를 3개 모델 세트로
+# 풀파이프라인(스캔 → 판정 → 미스킵분 수정 → 재스캔 검증) 실행:
+#   sonnet-opus : 수정=Sonnet 4.6,  판정=Opus 4.6
+#   haiku-sonnet: 수정=Haiku 4.5,   판정=Sonnet 4.6
+#   opus-opus   : 수정=Opus 4.6,    판정=Opus 4.6
+# 이상적 결과: issues_skipped_as_fp = 32 (수정 0건, 판정 비용만 발생)
+#
+# 필요: repo Variables(AWS_ROLE_ARN, AWS_REGION), Secret(SONAR_TOKEN)
+
+name: FP Triage Benchmark
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  SONAR_URL: https://sonar.dev-temp-mail.com
+
+jobs:
+  benchmark:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - set: sonnet-opus
+            fixer_model: global.anthropic.claude-sonnet-4-6
+            judge_model: global.anthropic.claude-opus-4-6-v1
+            pr: 101
+          - set: haiku-sonnet
+            fixer_model: global.anthropic.claude-haiku-4-5-20251001-v1:0
+            judge_model: global.anthropic.claude-sonnet-4-6
+            pr: 102
+          - set: opus-opus
+            fixer_model: global.anthropic.claude-opus-4-6-v1
+            judge_model: global.anthropic.claude-opus-4-6-v1
+            pr: 103
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure AWS credentials (OIDC -> AssumeRole)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install orchestrator dependencies
+        run: pip install -q -r orchestrator/requirements.txt
+
+      - name: Preflight — Bedrock judge model reachable
+        env:
+          JUDGE_MODEL: ${{ matrix.judge_model }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        working-directory: orchestrator
+        run: |
+          python - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".")
+          from src.agents.bedrock_api import BedrockAPIAgent
+          agent = BedrockAPIAgent(model_id=os.environ["JUDGE_MODEL"],
+                                  region=os.environ["AWS_REGION"])
+          out = agent.generate_fix("Reply with the single word: pong", "/tmp")
+          assert "pong" in out.lower(), f"judge model unreachable: {out!r}"
+          print("judge OK:", os.environ["JUDGE_MODEL"])
+          EOF
+
+      - name: Build fp-corpus
+        working-directory: benchmark/fp-corpus
+        run: |
+          docker run --rm -v "$PWD":/project -w /project \
+            maven:3.9-eclipse-temurin-17 mvn -q clean compile
+
+      - name: Write benchmark config
+        env:
+          FIXER_MODEL: ${{ matrix.fixer_model }}
+          JUDGE_MODEL: ${{ matrix.judge_model }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          cat > bench-config.yml <<EOF
+          agent:
+            type: "claude-code"
+            judge_type: "bedrock-api"
+            judge_model: "$JUDGE_MODEL"
+            claude:
+              allowed_tools: "Read,Write,Edit"
+              model: "$FIXER_MODEL"
+            bedrock:
+              region: "$AWS_REGION"
+          sonarqube:
+            url: "$SONAR_URL"
+            token: "\${SONAR_TOKEN}"
+            main_project_key: "fp-corpus-bench"
+          scanner:
+            ephemeral_key_pattern: "{project}-pr-{pr_number}"
+            pr_mode: "ephemeral"
+            rebuild_command: >-
+              docker run --rm -v "\$(pwd)":/project -w /project
+              maven:3.9-eclipse-temurin-17 mvn -q clean compile
+          assessment:
+            strategy: "triage"
+          modes:
+            pr_premerge:
+              enabled: true
+              delivery: "log"
+              max_issues_per_run: 0
+              push_fix_commit: false
+            post_merge:
+              enabled: true
+            nightly_batch:
+              enabled: true
+          EOF
+
+      - name: Run triage pipeline
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          CLAUDE_CODE_USE_BEDROCK: "1"
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          ANTHROPIC_SMALL_FAST_MODEL: global.anthropic.claude-haiku-4-5-20251001-v1:0
+          BENCH_SET: ${{ matrix.set }}
+          BENCH_PR: ${{ matrix.pr }}
+        working-directory: orchestrator
+        run: |
+          python -m src.main --config ../bench-config.yml pr-premerge \
+            --repo dummy/bench --pr-number "$BENCH_PR" \
+            --project-dir "$GITHUB_WORKSPACE/benchmark/fp-corpus" \
+            --cleanup > ../result.json 2> ../run.log || true
+          tail -40 ../run.log
+          cat ../result.json
+
+      - name: Attach set metadata
+        env:
+          BENCH_SET: ${{ matrix.set }}
+          FIXER_MODEL: ${{ matrix.fixer_model }}
+          JUDGE_MODEL: ${{ matrix.judge_model }}
+        run: |
+          python - <<'EOF'
+          import json, os
+          data = json.load(open("result.json"))
+          data["set"] = os.environ["BENCH_SET"]
+          data["fixer_model"] = os.environ["FIXER_MODEL"]
+          data["judge_model"] = os.environ["JUDGE_MODEL"]
+          json.dump(data, open(f"result-{os.environ['BENCH_SET']}.json", "w"),
+                    indent=2)
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ matrix.set }}
+          path: |
+            result-${{ matrix.set }}.json
+            run.log
+
+  report:
+    needs: benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: result-*
+          merge-multiple: true
+
+      - name: Build comparison report
+        run: |
+          python .github/workflows/fp_benchmark_report.py result-*.json \
+            > fp-triage-benchmark-report.md
+          cat fp-triage-benchmark-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report
+          path: fp-triage-benchmark-report.md
