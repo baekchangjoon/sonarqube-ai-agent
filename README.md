@@ -11,12 +11,39 @@ SonarQube 결함 자동 수정을 위한 LLM-agnostic AI Agent Orchestrator.
 | [거버넌스 청사진](docs/sonarqube_ai_agent_governance_blueprint.md) | RACI 매트릭스, 소유권 모델, 운영 프로세스 |
 | [구현 아키텍처](docs/ai_agent_implementation_architecture.md) | MCP Server, 임시(ephemeral) 프로젝트 워크플로, LLM 추상화 |
 
+## 설치
+
+세 가지 방법 중 하나를 선택한다:
+
+```bash
+# A. pipx (권장 — 한 줄 설치, 격리된 venv)
+pipx install "git+https://github.com/baekchangjoon/sonarqube-ai-agent#subdirectory=orchestrator"
+sonar-ai-agent --help
+
+# B. Docker 이미지 (Python/Node 불필요 — orchestrator + Claude Code + docker/gh CLI 동봉)
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$PWD":/work -w /work -e SONAR_TOKEN \
+  ghcr.io/baekchangjoon/sonarqube-ai-agent --help
+
+# C. 소스 (개발·데모용 — 아래 빠른 시작)
+git clone https://github.com/baekchangjoon/sonarqube-ai-agent
+cd sonarqube-ai-agent && pip install ./orchestrator
+```
+
+A/C 설치 후에는 `sonar-ai-agent` 명령을, 저장소 안에서는
+`python -m src.main`(동일 CLI)을 사용할 수 있다.
+
 ## 사전 요구사항
 
-- Docker Engine 20.10+ ([설치](https://docs.docker.com/engine/install/))
-- `pip`가 포함된 Python 3.9+
+- Docker Engine 20.10+ ([설치](https://docs.docker.com/engine/install/)) —
+  SonarQube·스캐너·빌드 컨테이너 실행
+- `pip`가 포함된 Python 3.9+ (Docker 이미지 사용 시 불필요)
+- Node.js 18+ — LLM Agent CLI 설치용 (Docker 이미지 사용 시 불필요)
+- `gh` CLI ([설치](https://cli.github.com/)) — PR 코멘트/Fix PR 전달 기능
+  사용 시에만
 - 여유 RAM 약 4 GB (SonarQube + PostgreSQL + 스캐너 컨테이너)
 - 인터넷 접속 (최초 실행 시 Docker 이미지 pull)
+- Linux/macOS (Windows는 WSL2 권장 — 셸 스크립트 기반)
 
 ### LLM Agent CLI 도구 (최소 하나 필요)
 
@@ -34,6 +61,8 @@ sonarqube-ai-agent/
 │   ├── ai_agent_implementation_architecture.md
 │   └── sonarqube_ai_agent_governance_blueprint.md
 │
+├── action.yml ──────────── 재사용 가능한 GitHub Action (CI 통합)
+├── Dockerfile ──────────── 올인원 이미지 (orchestrator + LLM/docker/gh CLI)
 ├── docker-compose.yml ──── SonarQube CE + PostgreSQL
 ├── .env.example ────────── Environment variable template
 ├── .env ────────────────── (generated) SONAR_URL + SONAR_TOKEN
@@ -58,6 +87,7 @@ sonarqube-ai-agent/
 ├── orchestrator/  ──────── Python AI Agent Orchestrator
 │   ├── config.yml                 Agents (fixer/judge), SonarQube, scanner
 │   │                              (pr_mode), assessment strategy, modes
+│   ├── pyproject.toml             pip/pipx 패키징 (`sonar-ai-agent` CLI)
 │   ├── requirements.txt           Python dependencies
 │   ├── pytest.ini                 Test runner config
 │   ├── src/
@@ -112,11 +142,11 @@ cp .env.example .env
 ### Step 2 — Orchestrator 설정
 
 ```bash
-cd orchestrator
-pip install -r requirements.txt
+pip install ./orchestrator
 
-# Verify SonarQube connectivity
-python -m src.main summary
+# Verify SonarQube connectivity (run inside orchestrator/ where config.yml lives)
+cd orchestrator
+sonar-ai-agent summary
 ```
 
 ### Step 3 — 실행 모드
@@ -167,6 +197,76 @@ python -m src.main summary --project-key sonarqube-agent-test
 ./scripts/99-teardown.sh          # stop containers (keep data)
 ./scripts/99-teardown.sh --clean  # stop + delete all data
 ```
+
+## 내 프로젝트에 적용하기
+
+위 빠른 시작은 동봉된 샘플 프로젝트 시연이다. 실제 프로젝트에 붙이려면:
+
+### 1. config 작성
+
+기존 SonarQube 서버를 쓴다면 docker-compose/scripts는 필요 없다.
+[`orchestrator/config-remote.yml`](orchestrator/config-remote.yml)
+(원격 서버 + fixer/judge 분리 + triage 예시)을 복사해 수정한다:
+
+```yaml
+sonarqube:
+  url: "https://sonar.mycompany.com"
+  token: "${SONAR_TOKEN}"          # .env 또는 환경변수
+  main_project_key: "my-project"
+scanner:
+  pr_mode: "ephemeral"             # 플러그인 없으면 ephemeral
+  rebuild_command: "mvn -q clean compile"
+  # Maven 표준 레이아웃이 아니면 분석 경로를 바꾼다 (빈 값 = 플래그 생략)
+  sources: "src/main/java"
+  tests: "src/test/java"           # 테스트 루트가 없으면 ""
+  java_binaries: "target/classes"
+assessment:
+  strategy: "triage"               # 오탐 스크리닝 권장
+```
+
+```bash
+sonar-ai-agent --config my-config.yml pr-premerge \
+  --repo owner/repo --pr-number 42 --project-dir . --cleanup
+```
+
+> 제약: 스캐너 기본값은 Maven 표준 레이아웃 Java 프로젝트다. 다른
+> 레이아웃은 위 `scanner.*` 경로를 조정한다. 스캔 전 컴파일된 클래스가
+> 있어야 하므로(`sonar.java.binaries`) `rebuild_command`를 꼭 맞춘다.
+
+### 2. CI에서 사용 (GitHub Action)
+
+```yaml
+jobs:
+  sonar-ai:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: baekchangjoon/sonarqube-ai-agent@v1
+        with:
+          mode: pr-premerge
+          config: .sonar-ai/config.yml
+          pr-number: ${{ github.event.pull_request.number }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}  # 또는 Bedrock OIDC
+```
+
+LLM 인증은 `ANTHROPIC_API_KEY` 또는 AWS Bedrock
+(`CLAUDE_CODE_USE_BEDROCK=1` + OIDC AssumeRole)을 사용한다.
+실사용 예시는 [`fp-triage-benchmark.yml`](.github/workflows/fp-triage-benchmark.yml) 참조.
+
+### 3. Docker로 사용
+
+```bash
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$PWD":/work -w /work \
+  -e SONAR_TOKEN -e CLAUDE_CODE_USE_BEDROCK=1 -e AWS_REGION \
+  ghcr.io/baekchangjoon/sonarqube-ai-agent \
+  --config config.yml post-merge --project-dir /work
+```
+
+스캐너·리빌드가 호스트 docker로 실행되므로 docker 소켓 마운트가 필요하다.
 
 ## 수정 파이프라인
 
@@ -226,6 +326,7 @@ scan → issues → FP assessment → LLM fix (in place) → rebuild + re-scan �
 | `sonarqube.main_project_key` | string | 메인 브랜치 프로젝트 |
 | `scanner.pr_mode` | `ephemeral` / `native` | PR 분석 전략 (Mode 1) |
 | `scanner.rebuild_command` | shell string | 각 스캔 전 프로젝트 디렉터리에서 실행 (빈 값 = skip) |
+| `scanner.sources` / `tests` / `java_binaries` / `java_test_binaries` | path string | 분석 경로 (기본 = Maven 표준 레이아웃; 빈 값 = 해당 플래그 생략) |
 | `assessment.strategy` | `none` / `triage` / `review` | 오탐 스크리닝 (수정 파이프라인 참고) |
 | `modes.pr_premerge.delivery` | `comment` / `log` | 분석 리포트를 PR에 게시하거나 log만 |
 | `modes.pr_premerge.push_fix_commit` | bool | 검증된 수정을 커밋으로 PR 브랜치에 push |
@@ -347,8 +448,9 @@ docker run --rm -v "$(pwd)":/project -w /project \
   maven:3.9-eclipse-temurin-17 mvn -q clean compile test-compile
 
 # 4. Create ephemeral SonarQube project and scan
+#    (admin/admin = 초기 기본값 — 첫 웹 로그인에서 변경했다면 그 값을 사용)
 source .env
-curl -sf -u admin:admin1 -X POST \
+curl -sf -u admin:admin -X POST \
   "$SONAR_URL/api/projects/create?name=e2e-fix-test&project=e2e-fix-test"
 
 docker run --rm --network host \
@@ -369,7 +471,7 @@ curl -sf -H "Authorization: Bearer $SONAR_TOKEN" \
   | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Issues: {d[\"total\"]}')"
 
 # 6. Cleanup ephemeral project
-curl -sf -u admin:admin1 -X POST \
+curl -sf -u admin:admin -X POST \
   "$SONAR_URL/api/projects/delete?project=e2e-fix-test"
 ```
 

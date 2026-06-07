@@ -181,10 +181,11 @@ class SonarQubeClient:
     def run_scanner(project_dir: str, project_key: str,
                     sonar_url: str, sonar_token: str,
                     project_name: Optional[str] = None,
-                    extra_args: Optional[list] = None) -> bool:
+                    extra_args: Optional[list] = None,
+                    paths: Optional[dict] = None) -> bool:
         cmd = _build_scanner_cmd(
             project_dir, project_key, sonar_url, sonar_token,
-            project_name, extra_args,
+            project_name, extra_args, paths,
         )
         logger.info("Running sonar-scanner for %s", project_key)
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -216,10 +217,21 @@ class SonarQubeClient:
         return resp.text
 
 
+# Maven-standard-layout Java defaults; override via scanner.* config.
+DEFAULT_SCANNER_PATHS = {
+    "sources": "src/main/java",
+    "tests": "src/test/java",
+    "java_binaries": "target/classes",
+    "java_test_binaries": "target/test-classes",
+}
+
+
 def _build_scanner_cmd(project_dir: str, project_key: str,
                        sonar_url: str, sonar_token: str,
                        project_name: str = None,
-                       extra_args: list = None) -> list[str]:
+                       extra_args: list = None,
+                       paths: dict = None) -> list[str]:
+    p = {**DEFAULT_SCANNER_PATHS, **(paths or {})}
     cmd = [
         "docker", "run", "--rm",
         "-e", f"SONAR_HOST_URL={_docker_reachable_url(sonar_url)}",
@@ -228,15 +240,19 @@ def _build_scanner_cmd(project_dir: str, project_key: str,
         "sonarsource/sonar-scanner-cli",
         f"-Dsonar.projectKey={project_key}",
         f"-Dsonar.projectName={project_name or project_key}",
-        "-Dsonar.sources=src/main/java",
-        "-Dsonar.tests=src/test/java",
-        "-Dsonar.java.binaries=target/classes",
-        "-Dsonar.java.test.binaries=target/test-classes",
+        f"-Dsonar.sources={p['sources']}",
         "-Dsonar.java.libraries=",
         "-Dsonar.coverage.jacoco.xmlReportPaths="
         "target/site/jacoco/jacoco.xml",
         "-Dsonar.sourceEncoding=UTF-8",
     ]
+    # Empty value = omit the flag (e.g. projects without a test root)
+    if p["tests"]:
+        cmd.append(f"-Dsonar.tests={p['tests']}")
+    if p["java_binaries"]:
+        cmd.append(f"-Dsonar.java.binaries={p['java_binaries']}")
+    if p["java_test_binaries"]:
+        cmd.append(f"-Dsonar.java.test.binaries={p['java_test_binaries']}")
     if extra_args:
         cmd.extend(extra_args)
     return cmd

@@ -35,6 +35,20 @@ class ScannerConfig:
     # Shell command run in project_dir before each scan (e.g. maven build).
     # Empty = skip.
     rebuild_command: str = ""
+    # Analysis paths (defaults = Maven standard layout). Empty string
+    # omits the corresponding -D flag (e.g. no test root).
+    sources: str = "src/main/java"
+    tests: str = "src/test/java"
+    java_binaries: str = "target/classes"
+    java_test_binaries: str = "target/test-classes"
+
+    def paths(self) -> dict:
+        return {
+            "sources": self.sources,
+            "tests": self.tests,
+            "java_binaries": self.java_binaries,
+            "java_test_binaries": self.java_test_binaries,
+        }
 
 
 @dataclass
@@ -105,7 +119,16 @@ class AppConfig:
 
 def _load_raw_yaml(config_path: str = None) -> dict:
     if config_path is None:
-        config_path = str(Path(__file__).parent.parent / "config.yml")
+        # ./config.yml (installed CLI usage) > repo default
+        candidates = [Path.cwd() / "config.yml",
+                      Path(__file__).parent.parent / "config.yml"]
+        existing = [p for p in candidates if p.exists()]
+        if not existing:
+            raise FileNotFoundError(
+                "config.yml not found in the current directory — "
+                "pass one with --config <path>"
+            )
+        config_path = str(existing[0])
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
 
@@ -142,6 +165,11 @@ def _parse_scanner(raw: dict) -> ScannerConfig:
         ),
         pr_mode=pr_mode,
         rebuild_command=raw.get("rebuild_command", ""),
+        sources=raw.get("sources", "src/main/java"),
+        tests=raw.get("tests", "src/test/java"),
+        java_binaries=raw.get("java_binaries", "target/classes"),
+        java_test_binaries=raw.get("java_test_binaries",
+                                   "target/test-classes"),
     )
 
 

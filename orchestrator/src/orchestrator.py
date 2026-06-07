@@ -500,6 +500,7 @@ class SonarQubeOrchestrator:
             sonar_url=self._config.sonarqube.url,
             sonar_token=self._config.sonarqube.token,
             project_name=project_name, extra_args=extra_args,
+            paths=self._config.scanner.paths(),
         )
         if not scan_ok:
             logger.error("Scanner failed for %s", project_key)

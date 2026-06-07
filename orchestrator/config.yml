@@ -36,6 +36,12 @@ scanner:
   rebuild_command: >-
     docker run --rm -v "$(pwd)":/project -w /project
     maven:3.9-eclipse-temurin-17 mvn -q clean compile test-compile
+  # Analysis paths (defaults = Maven standard layout).
+  # Empty string omits the flag (e.g. tests: "" for projects without tests).
+  sources: "src/main/java"
+  tests: "src/test/java"
+  java_binaries: "target/classes"
+  java_test_binaries: "target/test-classes"
 
 # False-positive / fix-quality assessment strategy:
 #   "none":   fix every issue, no screening

@@ -11,12 +11,39 @@ LLM-agnostic AI Agent Orchestrator for automated SonarQube defect remediation.
 | [Governance Blueprint](docs/sonarqube_ai_agent_governance_blueprint.en.md) | RACI matrix, ownership model, operational process |
 | [Implementation Architecture](docs/ai_agent_implementation_architecture.en.md) | MCP Server, ephemeral project workflow, LLM abstraction |
 
+## Installation
+
+Choose one of three methods:
+
+```bash
+# A. pipx (recommended — one-line install, isolated venv)
+pipx install "git+https://github.com/baekchangjoon/sonarqube-ai-agent#subdirectory=orchestrator"
+sonar-ai-agent --help
+
+# B. Docker image (no Python/Node needed — bundles orchestrator + Claude Code + docker/gh CLI)
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$PWD":/work -w /work -e SONAR_TOKEN \
+  ghcr.io/baekchangjoon/sonarqube-ai-agent --help
+
+# C. Source (for development/demo — see Quick Start below)
+git clone https://github.com/baekchangjoon/sonarqube-ai-agent
+cd sonarqube-ai-agent && pip install ./orchestrator
+```
+
+After installing via A/C you can use the `sonar-ai-agent` command, and inside
+the repository you can use `python -m src.main` (the same CLI).
+
 ## Prerequisites
 
-- Docker Engine 20.10+ ([install](https://docs.docker.com/engine/install/))
-- Python 3.9+ with `pip`
+- Docker Engine 20.10+ ([install](https://docs.docker.com/engine/install/)) —
+  runs the SonarQube, scanner, and build containers
+- Python 3.9+ with `pip` (not needed with the Docker image)
+- Node.js 18+ — for installing the LLM Agent CLI (not needed with the Docker image)
+- `gh` CLI ([install](https://cli.github.com/)) — only when using the
+  PR comment / Fix PR delivery features
 - ~4 GB free RAM (SonarQube + PostgreSQL + scanner containers)
 - Internet access (for pulling Docker images on first run)
+- Linux/macOS (Windows: WSL2 recommended — shell-script based)
 
 ### LLM Agent CLI Tools (at least one required)
 
@@ -34,6 +61,8 @@ sonarqube-ai-agent/
 │   ├── ai_agent_implementation_architecture.md
 │   └── sonarqube_ai_agent_governance_blueprint.md
 │
+├── action.yml ──────────── Reusable GitHub Action (CI integration)
+├── Dockerfile ──────────── All-in-one image (orchestrator + LLM/docker/gh CLIs)
 ├── docker-compose.yml ──── SonarQube CE + PostgreSQL
 ├── .env.example ────────── Environment variable template
 ├── .env ────────────────── (generated) SONAR_URL + SONAR_TOKEN
@@ -58,6 +87,7 @@ sonarqube-ai-agent/
 ├── orchestrator/  ──────── Python AI Agent Orchestrator
 │   ├── config.yml                 Agents (fixer/judge), SonarQube, scanner
 │   │                              (pr_mode), assessment strategy, modes
+│   ├── pyproject.toml             pip/pipx packaging (`sonar-ai-agent` CLI)
 │   ├── requirements.txt           Python dependencies
 │   ├── pytest.ini                 Test runner config
 │   ├── src/
@@ -112,11 +142,11 @@ cp .env.example .env
 ### Step 2 — Orchestrator Setup
 
 ```bash
-cd orchestrator
-pip install -r requirements.txt
+pip install ./orchestrator
 
-# Verify SonarQube connectivity
-python -m src.main summary
+# Verify SonarQube connectivity (run inside orchestrator/ where config.yml lives)
+cd orchestrator
+sonar-ai-agent summary
 ```
 
 ### Step 3 — Run Modes
@@ -167,6 +197,79 @@ Each mode prints a JSON result:
 ./scripts/99-teardown.sh          # stop containers (keep data)
 ./scripts/99-teardown.sh --clean  # stop + delete all data
 ```
+
+## Applying to your own project
+
+The Quick Start above demonstrates the bundled sample project. To wire this
+into a real project:
+
+### 1. Write a config
+
+If you use an existing SonarQube server, you don't need docker-compose/scripts.
+Copy and edit [`orchestrator/config-remote.yml`](orchestrator/config-remote.yml)
+(remote server + fixer/judge split + triage example):
+
+```yaml
+sonarqube:
+  url: "https://sonar.mycompany.com"
+  token: "${SONAR_TOKEN}"          # .env or environment variable
+  main_project_key: "my-project"
+scanner:
+  pr_mode: "ephemeral"             # ephemeral if you have no branch/PR plugin
+  rebuild_command: "mvn -q clean compile"
+  # Change the analysis paths if you don't use the Maven standard layout (empty value = omit the flag)
+  sources: "src/main/java"
+  tests: "src/test/java"           # "" if there is no test root
+  java_binaries: "target/classes"
+assessment:
+  strategy: "triage"               # recommended for false-positive screening
+```
+
+```bash
+sonar-ai-agent --config my-config.yml pr-premerge \
+  --repo owner/repo --pr-number 42 --project-dir . --cleanup
+```
+
+> Constraint: the scanner defaults to a Maven-standard-layout Java project.
+> For a different layout, adjust the `scanner.*` paths above. Because compiled
+> classes must exist before the scan (`sonar.java.binaries`), make sure
+> `rebuild_command` matches.
+
+### 2. Use in CI (GitHub Action)
+
+```yaml
+jobs:
+  sonar-ai:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: baekchangjoon/sonarqube-ai-agent@v1
+        with:
+          mode: pr-premerge
+          config: .sonar-ai/config.yml
+          pr-number: ${{ github.event.pull_request.number }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}  # or Bedrock OIDC
+```
+
+LLM auth uses `ANTHROPIC_API_KEY` or AWS Bedrock
+(`CLAUDE_CODE_USE_BEDROCK=1` + OIDC AssumeRole).
+For a real-world example see [`fp-triage-benchmark.yml`](.github/workflows/fp-triage-benchmark.yml).
+
+### 3. Run via Docker
+
+```bash
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$PWD":/work -w /work \
+  -e SONAR_TOKEN -e CLAUDE_CODE_USE_BEDROCK=1 -e AWS_REGION \
+  ghcr.io/baekchangjoon/sonarqube-ai-agent \
+  --config config.yml post-merge --project-dir /work
+```
+
+The docker socket mount is required because the scanner/rebuild run on the
+host's docker.
 
 ## Fix Pipeline
 
@@ -226,6 +329,7 @@ via `agents/pricing.py` (unknown models report tokens only).
 | `sonarqube.main_project_key` | string | Main branch project |
 | `scanner.pr_mode` | `ephemeral` / `native` | PR analysis strategy (Mode 1) |
 | `scanner.rebuild_command` | shell string | Run in project dir before each scan (empty = skip) |
+| `scanner.sources` / `tests` / `java_binaries` / `java_test_binaries` | path string | Analysis paths (default = Maven standard layout; empty value omits the flag) |
 | `assessment.strategy` | `none` / `triage` / `review` | False-positive screening (see Fix Pipeline) |
 | `modes.pr_premerge.delivery` | `comment` / `log` | Post analysis report to the PR or log only |
 | `modes.pr_premerge.push_fix_commit` | bool | Push verified fixes as a commit to the PR branch |
@@ -347,8 +451,9 @@ docker run --rm -v "$(pwd)":/project -w /project \
   maven:3.9-eclipse-temurin-17 mvn -q clean compile test-compile
 
 # 4. Create ephemeral SonarQube project and scan
+#    (admin/admin = initial default — if you changed it at first web login, use that value)
 source .env
-curl -sf -u admin:admin1 -X POST \
+curl -sf -u admin:admin -X POST \
   "$SONAR_URL/api/projects/create?name=e2e-fix-test&project=e2e-fix-test"
 
 docker run --rm --network host \
@@ -369,7 +474,7 @@ curl -sf -H "Authorization: Bearer $SONAR_TOKEN" \
   | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Issues: {d[\"total\"]}')"
 
 # 6. Cleanup ephemeral project
-curl -sf -u admin:admin1 -X POST \
+curl -sf -u admin:admin -X POST \
   "$SONAR_URL/api/projects/delete?project=e2e-fix-test"
 ```
 

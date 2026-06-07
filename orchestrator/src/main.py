@@ -26,7 +26,11 @@ class OrchestratorCLI:
     def run(self) -> int:
         args = self._parser.parse_args()
         _load_env()
-        config = AppConfig.load(args.config)
+        try:
+            config = AppConfig.load(args.config)
+        except FileNotFoundError as e:
+            logger.error("%s", e)
+            return 1
         orchestrator = SonarQubeOrchestrator(config)
 
         if not orchestrator.sonar.is_healthy():
@@ -43,9 +47,12 @@ class OrchestratorCLI:
 
 
 def _load_env() -> None:
-    env_path = Path(__file__).parent.parent.parent / ".env"
-    if env_path.exists():
-        load_dotenv(env_path)
+    # ./.env (installed CLI usage) > repo-root .env
+    for env_path in (Path.cwd() / ".env",
+                     Path(__file__).parent.parent.parent / ".env"):
+        if env_path.exists():
+            load_dotenv(env_path)
+            return
 
 
 def _handle_pr_premerge(args, orch: SonarQubeOrchestrator) -> int:

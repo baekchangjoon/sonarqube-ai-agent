@@ -1,0 +1,120 @@
+name: "SonarQube AI Agent"
+description: >-
+  Scan with SonarQube, triage false positives with an LLM judge, fix the
+  real issues with an LLM agent, and verify by re-scan.
+branding:
+  icon: "check-circle"
+  color: "blue"
+
+inputs:
+  mode:
+    description: "pr-premerge | post-merge | nightly-batch | summary"
+    required: true
+  config:
+    description: "Path to the orchestrator config.yml in your repository"
+    required: true
+  project-dir:
+    description: "Directory of the project to scan/fix"
+    required: false
+    default: ${{ github.workspace }}
+  repo:
+    description: "owner/repo for PR comments (pr-premerge)"
+    required: false
+    default: ${{ github.repository }}
+  pr-number:
+    description: "Pull request number (pr-premerge)"
+    required: false
+    default: ""
+  pr-branch:
+    description: "PR branch name (scanner.pr_mode: native)"
+    required: false
+    default: ""
+  pr-base:
+    description: "PR base branch (scanner.pr_mode: native)"
+    required: false
+    default: "main"
+  cleanup:
+    description: "Delete the ephemeral PR project afterwards (true/false)"
+    required: false
+    default: "true"
+  install-claude-code:
+    description: "Install the Claude Code CLI (set false if you install your own agent CLI)"
+    required: false
+    default: "true"
+  python-version:
+    description: "Python version for the orchestrator"
+    required: false
+    default: "3.12"
+
+outputs:
+  result-json:
+    description: "Path to the run result JSON"
+    value: ${{ steps.run.outputs.result-json }}
+  issues-found:
+    description: "Issues found by the scan"
+    value: ${{ steps.run.outputs.issues-found }}
+  issues-skipped-as-fp:
+    description: "Issues skipped as false positives"
+    value: ${{ steps.run.outputs.issues-skipped-as-fp }}
+  fixes-verified:
+    description: "Fixes confirmed by re-scan"
+    value: ${{ steps.run.outputs.fixes-verified }}
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install orchestrator
+      shell: bash
+      run: pip install -q "${{ github.action_path }}/orchestrator"
+
+    - name: Install Claude Code CLI
+      if: inputs.install-claude-code == 'true'
+      shell: bash
+      run: |
+        command -v claude >/dev/null 2>&1 || npm install -g @anthropic-ai/claude-code
+
+    - name: Run orchestrator
+      id: run
+      shell: bash
+      env:
+        IN_MODE: ${{ inputs.mode }}
+        IN_CONFIG: ${{ inputs.config }}
+        IN_PROJECT_DIR: ${{ inputs.project-dir }}
+        IN_REPO: ${{ inputs.repo }}
+        IN_PR_NUMBER: ${{ inputs.pr-number }}
+        IN_PR_BRANCH: ${{ inputs.pr-branch }}
+        IN_PR_BASE: ${{ inputs.pr-base }}
+        IN_CLEANUP: ${{ inputs.cleanup }}
+      run: |
+        set -o pipefail
+        args=(--config "$IN_CONFIG" "$IN_MODE")
+        case "$IN_MODE" in
+          pr-premerge)
+            args+=(--repo "$IN_REPO" --pr-number "$IN_PR_NUMBER"
+                   --project-dir "$IN_PROJECT_DIR" --pr-base "$IN_PR_BASE")
+            [ -n "$IN_PR_BRANCH" ] && args+=(--pr-branch "$IN_PR_BRANCH")
+            [ "$IN_CLEANUP" = "true" ] && args+=(--cleanup)
+            ;;
+          post-merge|nightly-batch)
+            args+=(--project-dir "$IN_PROJECT_DIR")
+            ;;
+          summary)
+            ;;
+          *)
+            echo "::error::unknown mode: $IN_MODE"; exit 1
+            ;;
+        esac
+        sonar-ai-agent "${args[@]}" | tee "$RUNNER_TEMP/result.json"
+        echo "result-json=$RUNNER_TEMP/result.json" >> "$GITHUB_OUTPUT"
+        python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+        import json, os
+        with open(os.path.join(os.environ["RUNNER_TEMP"], "result.json")) as f:
+            d = json.load(f)
+        print(f"issues-found={d.get('issues_found', '')}")
+        print(f"issues-skipped-as-fp={d.get('issues_skipped_as_fp', '')}")
+        print(f"fixes-verified={d.get('fixes_verified', '')}")
+        EOF

@@ -81,12 +81,28 @@ class TestScannerCommand:
         assert cmd[-1] == "-Dsonar.pullrequest.key=7"
         assert "SONAR_HOST_URL=https://sonar.example.com" in cmd
 
-    def test_no_extra_args(self):
+    def test_no_extra_args_uses_maven_layout_defaults(self):
         cmd = _build_scanner_cmd(
             project_dir="/tmp/p", project_key="k",
             sonar_url="https://sonar.example.com", sonar_token="t",
         )
-        assert cmd[-1] == "-Dsonar.sourceEncoding=UTF-8"
+        assert "-Dsonar.sources=src/main/java" in cmd
+        assert "-Dsonar.tests=src/test/java" in cmd
+        assert "-Dsonar.java.binaries=target/classes" in cmd
+
+    def test_paths_override(self):
+        cmd = _build_scanner_cmd(
+            project_dir="/tmp/p", project_key="k",
+            sonar_url="https://sonar.example.com", sonar_token="t",
+            paths={"sources": "lib", "tests": "",
+                   "java_binaries": "out", "java_test_binaries": ""},
+        )
+        assert "-Dsonar.sources=lib" in cmd
+        assert "-Dsonar.java.binaries=out" in cmd
+        # empty values omit the flags entirely
+        assert not any(a.startswith("-Dsonar.tests=") for a in cmd)
+        assert not any(a.startswith("-Dsonar.java.test.binaries=")
+                       for a in cmd)
 
 
 @pytest.mark.integration
