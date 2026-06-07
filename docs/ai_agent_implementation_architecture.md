@@ -15,11 +15,28 @@
 
 ### 설계 결정 사항
 
-| 결정 | 선택 | 근거 |
+| 결정 | 선택 (설계 시점) | 구현 결과 (2026-06-07) |
 |------|------|------|
-| MCP Server 사용 여부 | **사용** | LLM 도구 교체 용이성, AI Agent의 SonarQube 네이티브 연동 |
-| LLM 도구 교체 가능성 | **필수** | Orchestrator에서 LLM 인터페이스 추상화 |
-| PR 수준 분석 | **임시 프로젝트 키 방식** | Community Edition에서 PR 분석 가능하게 하는 워크어라운드 |
+| MCP Server 사용 여부 | 사용 | **변경: REST 직접 호출** — 오케스트레이터의 판정·검증 루프는 결정적 REST가 단순하고 테스트 용이. MCP는 대화형 에이전트 연동용으로 유지 (§4.3, `05-test-mcp-server.sh`) |
+| LLM 도구 교체 가능성 | 필수 | **구현 + 확장**: 4개 백엔드 + 역할 분리(수정/판정 에이전트 별도 라우팅) |
+| PR 수준 분석 | 임시 프로젝트 키 방식 | **구현 + 확장**: `scanner.pr_mode = ephemeral \| native` — branch/PR plugin이 설치된 서버에선 네이티브 `sonar.pullrequest.*` 사용 가능 |
+
+### 설계 대비 구현 변경 요약 (v3.0, 2026-06-07)
+
+본 문서의 v2.0까지는 사전 설계였고, 이후 구현 과정에서 다음이 확정·추가되었다.
+상세 코드는 [`orchestrator/`](../orchestrator)와 [README](../README.md) 참조.
+
+| 영역 | 설계 (v2.0) | 구현 (v3.0) |
+|------|------------|------------|
+| SonarQube 연동 | MCP Server 경유 | **REST 직접** (`sonarqube_client.py`) — MCP는 대화형 용도로만 |
+| 수정 검증 | Phase 2 예정 | **구현**: rebuild → 재스캔 → 이슈 키 폐쇄 확인 (LLM 자기 보고 불신) |
+| 결과 전달 | Phase별 택1 | **모두 구현**: PR 코멘트(Mode 1) + PR 브랜치 커밋 push(Mode 1) + Fix PR(Mode 2/3) |
+| 오탐(FP) 대응 | 설계에 없음 | **`assessment.strategy`**: `triage`(사전 판정) / `review`(수정+독립 사후 리뷰) — 판정·근거·confidence를 리포트 |
+| 에이전트 역할 분리 | 단일 에이전트 | **수정(fixer)/판정(judge) 분리** (`agent.judge_type/judge_model`) — 판정은 하네스 불필요라 Bedrock Converse 단발 호출 가능 |
+| Bedrock 백엔드 | invoke_model (Claude 전용) | **Converse API** (모델 불문: Claude/Nova) + usage 수집 |
+| 비용 계측 | 설계에 없음 | run당 **LLM Usage**(토큰/비용, 역할별) — 결과 JSON·리포트에 포함 |
+| 오탐 벤치마크 | 설계에 없음 | [`benchmark/fp-corpus`](../benchmark/fp-corpus) — 22사례/32이슈 전부 ground-truth FP, CE 발화 검증 완료 |
+| 테스트 코드 생성 | 수정과 함께 생성 | **범위 제외** — 수정 프롬프트는 "해당 이슈만 in-place 수정"으로 한정 (FixResult.test_code 필드는 잔존하나 미사용) |
 
 ---
 
@@ -146,6 +163,13 @@ SonarQube MCP Server는 AI Agent와 SonarQube 사이의 **표준 브릿지**다.
 └─────────────────────────────────────────────────────────────┘
 ```
 
+> **구현 노트 (v3.0)**: 위 MCP Server 구상은 "사람이 LLM CLI와 대화하며
+> SonarQube를 조회"하는 시나리오에는 그대로 유효하다. 그러나 **오케스트레이터의
+> 자동 파이프라인은 MCP를 거치지 않고 REST를 직접 호출**하도록 구현했다 —
+> 판정·검증 루프는 입력과 출력이 고정된 결정적 호출이라 MCP 계층이 주는
+> 유연성보다 단순성·테스트 용이성이 더 중요했기 때문이다. LLM 교체 용이성은
+> MCP 대신 `agents/` 추상화 계층(LLMAgent ABC + factory)이 담당한다.
+
 ### 2.4 LLM 도구 교체 가능성
 
 MCP(Model Context Protocol)는 **LLM-Agnostic 표준 프로토콜**이다. SonarQube MCP Server를 사용하면, LLM 도구 교체가 설정 변경만으로 가능하다.
@@ -259,6 +283,12 @@ MCP(Model Context Protocol)는 **LLM-Agnostic 표준 프로토콜**이다. Sonar
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+> **구현 노트 (v3.0)**: 위 구조도에서 "MCP Protocol / SonarQube MCP Server"
+> 구간은 최종 구현에서 **Orchestrator → SonarQube REST 직접 호출**로 대체되었다.
+> 또한 LLM Agent Interface 아래에 **judge(판정) 역할**이 추가되어, FP 트리아지와
+> 수정 리뷰는 fixer와 다른 백엔드/모델(예: 수정=Sonnet via Claude Code,
+> 판정=Opus via Bedrock Converse)로 라우팅할 수 있다.
+
 ### 3.2 세 가지 실행 모드 상세
 
 #### Mode 1: PR Pre-merge (핵심 모드)
@@ -324,6 +354,13 @@ MCP(Model Context Protocol)는 **LLM-Agnostic 표준 프로토콜**이다. Sonar
  외주 개발자: AI 수정 제안 리뷰 → 반영 → 머지
 ```
 
+> **구현 노트 (v3.0)**: 위 흐름의 4(Sandbox 검증)는 "rebuild → sonar-scanner
+> 재실행 → 원래 이슈 키가 닫혔는지 확인"으로 구현되었고, 5의 전달 방식은
+> A(PR 코멘트)와 B(PR 브랜치 Fix 커밋 push)가 Mode 1에, C(별도 Fix PR)가
+> Mode 2/3에 구현되어 config로 각각 토글한다. 또한 2와 3 사이에
+> **FP 트리아지 단계**가 추가되었다 — judge가 오탐으로 판정한 이슈는 수정을
+> 건너뛰고 근거·confidence와 함께 리포트된다.
+
 #### Mode 2: Post-merge (보완 모드)
 
 ```
@@ -378,9 +415,9 @@ AI 모더나이제이션으로 전환된 코드의 **레거시 기술 부채를 
 SonarQube AI Agent Orchestrator
 
 핵심 설계 원칙:
-1. LLM Agent는 추상 인터페이스로 교체 가능
-2. SonarQube 연동은 MCP Server 경유
-3. Architecture of Trust: AI 제안 → Sandbox 검증 → Human 리뷰
+1. LLM Agent는 추상 인터페이스로 교체 가능 (수정/판정 역할 분리 포함)
+2. SonarQube 연동은 REST 직접 호출 (sonarqube_client.py)
+3. Architecture of Trust: AI 제안 → 재스캔 검증 → Human 리뷰
    (https://www.sonarsource.com/blog/join-the-sonarqube-remediation-agent-beta/)
 """
 from abc import ABC, abstractmethod
@@ -418,6 +455,15 @@ class FixResult:
     test_code: str
     explanation: str = ""
     errors: list = field(default_factory=list)
+    fix_confidence: float = None  # LLM-assessed (review 전략: 독립 리뷰어 값)
+
+
+@dataclass
+class TriageResult:
+    """오탐 판정 결과 (FP 트리아지 / 수정 리뷰)."""
+    verdict: str       # TRUE_POSITIVE | FALSE_POSITIVE (리뷰: 평가 문자열)
+    confidence: float  # 0.0-1.0, LLM 자가 보고 (비캘리브레이션)
+    reason: str = ""
 
 
 # ─────────────────────────────────────────────
@@ -427,26 +473,30 @@ class FixResult:
 class LLMAgent(ABC):
     """
     LLM 도구 교체를 위한 추상 인터페이스.
-    모든 구현체는 MCP Server와 연동하여
-    SonarQube 이슈를 조회하고 수정 코드를 생성한다.
+    이슈 컨텍스트는 Orchestrator가 프롬프트에 직접 주입한다
+    (SonarQube 소스 조회 실패 시 로컬 체크아웃 폴백).
     """
 
     @abstractmethod
     def generate_fix(self, prompt: str, working_dir: str) -> str:
-        """Send a prompt and return the raw LLM response."""
+        """수정 프롬프트 실행 — 에이전틱 CLI는 파일을 직접 편집."""
+
+    def generate_triage(self, prompt: str, working_dir: str) -> str:
+        """읽기 전용 판정 호출 (기본: generate_fix 위임).
+        Claude Code는 --allowedTools Read로, Bedrock은 단발 Converse로."""
+
+    def get_usage(self) -> dict:
+        """누적 토큰/비용 — {"input_tokens", "output_tokens", "cost_usd"}."""
 
     @abstractmethod
-    def supports_mcp(self) -> bool:
-        """Whether this agent natively connects to MCP servers."""
+    def supports_mcp(self) -> bool: ...
 
     @abstractmethod
-    def name(self) -> str:
-        """Human-readable agent name for logging."""
+    def name(self) -> str: ...
 
-    def build_fix_prompt(self, issue_rule, issue_message,
-                         file_path, line, source_context) -> str:
-        """Construct a standardized fix prompt from issue details."""
-        pass
+    # 프롬프트 빌더 4종: build_fix_prompt(in-place 수정 + confidence JSON),
+    # build_triage_prompt(TP/FP 판정), build_fix_or_escape_prompt(D안),
+    # build_fix_review_prompt / build_fp_review_prompt(독립 리뷰)
 
 
 class KiroCLIAgent(LLMAgent):
@@ -508,19 +558,21 @@ class GeminiCLIAgent(LLMAgent):
 
 class BedrockAPIAgent(LLMAgent):
     """
-    Fallback: AWS Bedrock API 직접 호출.
-    MCP 미지원 — Orchestrator가 이슈 정보를 프롬프트에 직접 삽입.
+    AWS Bedrock Converse API 호출 (모델 불문: Claude/Nova/...).
+    하네스 없음 → 파일 편집 불가, 판정(judge) 역할에 적합.
+    Converse 응답의 usage로 토큰을 누적하고 단가표(pricing.py)로
+    비용을 추정한다 (미등록 모델은 토큰만 보고).
     """
 
     def generate_fix(self, prompt: str, working_dir: str) -> str:
-        # boto3.client('bedrock-runtime').invoke_model(...)
+        # boto3.client('bedrock-runtime').converse(modelId=..., messages=...)
         pass
 
     def supports_mcp(self) -> bool:
         return False
 
     def name(self) -> str:
-        return "Bedrock API"
+        return "Bedrock Converse"
 
 
 # ─────────────────────────────────────────────
@@ -627,55 +679,61 @@ class SonarQubeOrchestrator:
 ### 4.2 설정 파일
 
 ```yaml
-# config.yml
+# config.yml (v3.0 — 구현 기준)
 
 agent:
-  # LLM 도구 선택: kiro-cli | claude-code | gemini-cli | bedrock-api
-  type: "kiro-cli"
+  # 수정(fixer) 백엔드: kiro-cli | claude-code | gemini-cli | bedrock-api
+  type: "claude-code"
+  # 판정(judge) 역할 — FP 트리아지·수정 리뷰. 하네스 불필요라
+  # fixer와 다른 백엔드/모델 가능. 미설정 시 fixer와 동일.
+  judge_type: "bedrock-api"
+  judge_model: "global.anthropic.claude-opus-4-6-v1"
 
-  # Kiro CLI 전용 설정
   kiro:
     agent_name: "sonarqube-fixer"
     trust_all_tools: true
-
-  # Claude Code 전용 설정
   claude:
     allowed_tools: "Read,Write,Edit"
-    model: "sonnet"
-
-  # Gemini CLI — 파라미터 없음 (--yolo -p 모드 사용)
+    model: "sonnet"          # CLAUDE_CODE_USE_BEDROCK=1이면 Bedrock 프로파일 ID
   gemini: {}
-
-  # Bedrock API Fallback 설정
   bedrock:
-    model_id: "anthropic.claude-sonnet-4-20250514"
-    region: "us-east-1"
+    model_id: "global.anthropic.claude-sonnet-4-6"
+    region: "ap-northeast-2"
 
 sonarqube:
-  url: "http://sonarqube.internal:9000"
+  url: "${SONAR_URL}"
   token: "${SONAR_TOKEN}"
   main_project_key: "myproject"
 
 scanner:
-  # PR 분석 시 임시 프로젝트 키 패턴
   ephemeral_key_pattern: "{project}-pr-{pr_number}"
+  # "ephemeral": CE 워크어라운드 / "native": branch·PR plugin의 sonar.pullrequest.*
+  pr_mode: "ephemeral"
+  # 검증 재스캔 전 빌드 명령 (이슈 키 폐쇄 확인의 전제)
+  rebuild_command: >-
+    docker run --rm -v "$(pwd)":/project -w /project
+    maven:3.9-eclipse-temurin-17 mvn -q clean compile test-compile
+
+# 오탐 대응 전략: none | triage(사전 판정) | review(수정+독립 사후 리뷰)
+assessment:
+  strategy: "triage"
 
 modes:
   pr_premerge:
     enabled: true
-    delivery: "comment"  # comment | commit | fix-pr
-
+    delivery: "comment"      # comment | log
+    max_issues_per_run: 0
+    push_fix_commit: true    # 검증된 수정을 PR 브랜치에 커밋 push
   post_merge:
     enabled: true
-
+    create_fix_pr: true
+    fix_pr: { repo: "", base: "main" }
   nightly_batch:
     enabled: true
-    # cron 스케줄은 외부(crontab/GitHub Actions)에서 관리
     max_issues_per_run: 10
-    severity_filter:
-      - BLOCKER
-      - CRITICAL
-      - MAJOR
+    severity_filter: [BLOCKER, CRITICAL, MAJOR]
+    create_fix_pr: true
+    fix_pr: { repo: "", base: "main" }
 ```
 
 ### 4.3 LLM별 MCP Server 설정
@@ -919,6 +977,11 @@ AI 모더나이제이션 코드를 **베이스라인**으로 설정하고, 외�
 
 ## 9. 단계별 구현 로드맵
 
+> **진행 현황 (2026-06-07)**: Phase 0 완료(단, MCP 연동 검증은 대화형 용도로만
+> 유효 — 파이프라인은 REST 직접), Phase 1 완료, Phase 2 완료(검증 루프·Fix PR·
+> Nightly·전 LLM 구현체) + 설계에 없던 확장(FP 트리아지, judge 분리, 비용 계측,
+> FP 코퍼스) 추가. Phase 3(전체 프로젝트 확대·대시보드·SLA 연동)는 미착수.
+
 ### Phase 0: 인프라 검증 (1-2주)
 
 ```
@@ -1043,4 +1106,4 @@ AI 모더나이제이션 코드를 **베이스라인**으로 설정하고, 외�
 
 ---
 
-*Document Version: 2.0 | Created: 2026-03-21 | Classification: Internal*
+*Document Version: 3.0 | Created: 2026-03-21 | Updated: 2026-06-07 (구현 반영) | Classification: Internal*
