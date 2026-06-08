@@ -115,6 +115,37 @@ class TestRuleDoc:
             "how_to_fix": "", "exceptions": "",
         }
 
+    def test_entity_encoded_markup_is_stripped_not_revived(self):
+        # unescape-then-strip: an entity-encoded tag must not survive as
+        # live markup in the prompt.
+        client = self._client({
+            "descriptionSections": [
+                {"key": "how_to_fix",
+                 "content": "&lt;script&gt;alert(1)&lt;/script&gt;ok"},
+            ],
+        })
+        doc = client.get_rule_doc("java:S1")
+        assert "<script>" not in doc["how_to_fix"]
+        assert doc["how_to_fix"] == "alert(1)ok"
+
+    def test_control_chars_stripped(self):
+        client = self._client({
+            "descriptionSections": [
+                {"key": "how_to_fix", "content": "a\x00b\x07c\tok\nline"},
+            ],
+        })
+        doc = client.get_rule_doc("java:S1")
+        assert doc["how_to_fix"] == "abc\tok\nline"
+
+    def test_length_capped(self):
+        client = self._client({
+            "descriptionSections": [
+                {"key": "how_to_fix", "content": "x" * 9000},
+            ],
+        })
+        doc = client.get_rule_doc("java:S1")
+        assert len(doc["how_to_fix"]) == 4000
+
 
 class TestScannerCommand:
 

@@ -263,10 +263,23 @@ def _exceptions_html(description_html: str) -> str:
     return match.group(1) if match else ""
 
 
+# Rule docs come from the SonarQube server and are injected into LLM
+# prompts. Whoever can define a (custom) rule controls this text, so it
+# is untrusted: unescape BEFORE stripping tags (else entity-encoded
+# markup survives), drop control chars, and cap length to bound the
+# prompt-injection surface. A delimiter + "treat as data" instruction
+# is added at the injection site (LLMAgent._doc_block).
+RULE_DOC_MAX_CHARS = 4000
+
+
 def _html_to_text(html: str) -> str:
     """Strip tags but keep text (incl. code inside <pre>) for prompts."""
-    text = unescape(re.sub(r"<[^>]+>", "", html))
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
+    # unescape first so an entity-encoded tag becomes a real tag we then
+    # strip, instead of surviving as visible "<script>" text.
+    text = re.sub(r"<[^>]+>", "", unescape(html))
+    text = "".join(c for c in text if c in "\n\t" or ord(c) >= 0x20)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text[:RULE_DOC_MAX_CHARS]
 
 
 # Maven-standard-layout Java defaults; override via scanner.* config.
