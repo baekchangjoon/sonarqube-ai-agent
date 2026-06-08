@@ -222,7 +222,7 @@ scanner:
   tests: "src/test/java"           # "" if there is no test root
   java_binaries: "target/classes"
 assessment:
-  strategy: "triage"               # recommended for false-positive screening
+  strategy: "triage_review"        # operational default — triage → fix → review (3 passes)
 ```
 
 ```bash
@@ -291,8 +291,19 @@ scan → issues → FP assessment → LLM fix (in place) → rebuild + re-scan �
      FALSE_POSITIVE → skip + report with confidence
    - `review` — the fix prompt has an FP escape hatch; afterwards an
      **independent** LLM call reviews the applied diff (or the FP claim)
-     and provides the confidence, avoiding self-assessment bias.
+     and provides the confidence, avoiding self-assessment bias. The fix
+     reviewer receives the pre-fix code (scan snapshot), the diff, the
+     fixer's stated rationale, and the rule's how-to-fix doc
+     (`include_rule_docs`).
      Unparseable/failed judgments fall back to "fix it" (the safe default).
+   - `triage_review` (operational default) — three passes: the judge
+     triages FPs first (FP→skip), the fixer edits **true positives
+     only**, then the judge reviews each outcome (the applied fix or the
+     FP skip). Decoupling the FP decision from the fixer preserves recall
+     better than `review` while adding the review safety net — best
+     recall and precision in the benchmark (also the highest per-issue
+     cost). See [`benchmark/results`](benchmark/results) for the
+     comparison.
 
    Judgment calls need no file-editing harness, so they can run on a
    different backend/model than the fixer (`agent.judge_type` /
@@ -330,7 +341,10 @@ via `agents/pricing.py` (unknown models report tokens only).
 | `scanner.pr_mode` | `ephemeral` / `native` | PR analysis strategy (Mode 1) |
 | `scanner.rebuild_command` | shell string | Run in project dir before each scan (empty = skip) |
 | `scanner.sources` / `tests` / `java_binaries` / `java_test_binaries` | path string | Analysis paths (default = Maven standard layout; empty value omits the flag) |
-| `assessment.strategy` | `none` / `triage` / `review` | False-positive screening (see Fix Pipeline) |
+| `assessment.strategy` | `none` / `triage` / `review` / `triage_review` | False-positive screening (see Fix Pipeline; operational default `triage_review`) |
+| `assessment.context_lines` | int (default 5) | Source lines around the issue line in judgment/fix prompts |
+| `assessment.full_file_max_lines` | int (default 150) | Files at most this many lines are injected whole instead of as a window (`0` = always window) |
+| `assessment.include_rule_docs` | bool (default false) | Inject SonarQube rule docs — how-to-fix for the fixer, Exceptions for the judge |
 | `modes.pr_premerge.delivery` | `comment` / `log` | Post analysis report to the PR or log only |
 | `modes.pr_premerge.push_fix_commit` | bool | Push verified fixes as a commit to the PR branch |
 | `modes.*.max_issues_per_run` | int | Cap per run, `0` = unlimited |

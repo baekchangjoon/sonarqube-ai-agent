@@ -2,6 +2,8 @@
 
 # FP Triage Benchmark — Recall + Precision (2026-06-07, round 2)
 
+> **Strategy note**: this benchmark ran with `assessment.strategy: "triage"` (option C — **pre-fix** screening judgment). The operational default has since moved to option D (`review`: fix attempt → FP escape → independent review), whose performance is not covered by these numbers.
+
 Following [round 1 (recall only)](fp-triage-comparison-2026-06-07.en.md),
 this run adds the new [tp-corpus](../docs/tp-corpus-manifest.en.md) (24 real
 defects mirroring the fp-corpus rules) to also measure **precision (how

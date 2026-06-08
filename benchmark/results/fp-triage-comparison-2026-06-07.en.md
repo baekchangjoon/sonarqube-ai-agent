@@ -2,6 +2,8 @@
 
 # FP Triage Benchmark — Model set comparison (2026-06-07)
 
+> **Strategy note**: this benchmark ran with `assessment.strategy: "triage"` (option C — **pre-fix** screening judgment). The operational default has since moved to option D (`review`: fix attempt → FP escape → independent review), whose performance is not covered by these numbers.
+
 - Target: `benchmark/fp-corpus` — 32 issues, all ground truth = FALSE_POSITIVE
 - Pipeline: scan → LLM triage (skip if false positive) → fix the non-skipped → rescan verification (`assessment.strategy: triage`)
 - Ideal result: false-positive detection 32/32, 0 fixes — only triage cost is incurred

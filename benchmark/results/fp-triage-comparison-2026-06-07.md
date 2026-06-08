@@ -2,6 +2,8 @@
 
 # FP 트리아지 벤치마크 — 모델 세트 비교 (2026-06-07)
 
+> **실행 전략**: 이 벤치마크는 `assessment.strategy: "triage"`(전략 C — 수정 **전** 사전 스크리닝 판정)로 실행되었다. 운영 기본값은 이후 전략 D(`review`, 수정 시도 → FP escape → 독립 리뷰)로 변경되었으며, D의 성능은 본 문서의 수치에 포함되지 않는다.
+
 - 대상: `benchmark/fp-corpus` — 이슈 32개, 전부 ground truth = FALSE_POSITIVE
 - 파이프라인: 스캔 → LLM 판정(오탐이면 스킵) → 미스킵분 수정 → 재스캔 검증 (`assessment.strategy: triage`)
 - 이상적 결과: 오탐 검출 32/32, 수정 0건 — 판정 비용만 발생

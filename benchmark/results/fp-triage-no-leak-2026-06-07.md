@@ -2,6 +2,8 @@
 
 # FP 트리아지 벤치마크 — 답안지 격리 후 (2026-06-07, 3차)
 
+> **실행 전략**: 이 벤치마크는 `assessment.strategy: "triage"`(전략 C — 수정 **전** 사전 스크리닝 판정)로 실행되었다. 운영 기본값은 이후 전략 D(`review`, 수정 시도 → FP escape → 독립 리뷰)로 변경되었으며, D의 성능은 본 문서의 수치에 포함되지 않는다.
+
 [2차](fp-triage-precision-2026-06-07.md)까지의 fp-corpus는 파일 Javadoc에
 `expected: java:SXXXX`, "Why it is a false positive: ..." 식으로 **정답이
 파일 안에** 적혀 있었다. 3차는 코퍼스를 중립화한 뒤

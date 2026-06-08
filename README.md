@@ -221,7 +221,7 @@ scanner:
   tests: "src/test/java"           # 테스트 루트가 없으면 ""
   java_binaries: "target/classes"
 assessment:
-  strategy: "triage"               # 오탐 스크리닝 권장
+  strategy: "triage_review"        # 운영 기본값 — 판정→수정→리뷰 3패스
 ```
 
 ```bash
@@ -288,8 +288,16 @@ scan → issues → FP assessment → LLM fix (in place) → rebuild + re-scan �
      FALSE_POSITIVE → skip + confidence와 함께 리포트
    - `review` — 수정 프롬프트에 FP escape hatch가 있고, 이후
      **독립적인** LLM 호출이 적용된 diff(또는 FP 주장)를 리뷰하여
-     confidence를 제공한다 — 자기 평가 편향을 회피. 파싱 불가/실패한
-     판정은 "수정한다"(안전 기본값)로 fallback한다.
+     confidence를 제공한다 — 자기 평가 편향을 회피. 수정 리뷰어는
+     수정 전 코드(스캔 스냅샷), diff, 수정 에이전트의 근거, 그리고
+     룰의 how-to-fix 문서(`include_rule_docs`)를 함께 받는다.
+     파싱 불가/실패한 판정은 "수정한다"(안전 기본값)로 fallback한다.
+   - `triage_review` (운영 기본값) — 3패스: judge가 먼저 FP를
+     판정(FP→skip), fixer가 **true positive만** 수정, 이후 judge가
+     각 결과(적용된 수정 또는 FP skip)를 리뷰한다. FP 판정 주체를
+     fixer에서 분리해 `review`보다 재현율을 보존하면서 검토 안전망을
+     더한다 — 벤치마크에서 재현율·정밀도 모두 최고(이슈당 비용도 최고).
+     비교는 [`benchmark/results`](benchmark/results) 참고.
 
    판정(judgment) 호출은 파일 편집 harness가 필요 없으므로, 수정
    에이전트(fixer)와 다른 백엔드/모델에서 실행할 수 있다
@@ -327,7 +335,10 @@ scan → issues → FP assessment → LLM fix (in place) → rebuild + re-scan �
 | `scanner.pr_mode` | `ephemeral` / `native` | PR 분석 전략 (Mode 1) |
 | `scanner.rebuild_command` | shell string | 각 스캔 전 프로젝트 디렉터리에서 실행 (빈 값 = skip) |
 | `scanner.sources` / `tests` / `java_binaries` / `java_test_binaries` | path string | 분석 경로 (기본 = Maven 표준 레이아웃; 빈 값 = 해당 플래그 생략) |
-| `assessment.strategy` | `none` / `triage` / `review` | 오탐 스크리닝 (수정 파이프라인 참고) |
+| `assessment.strategy` | `none` / `triage` / `review` / `triage_review` | 오탐 스크리닝 (수정 파이프라인 참고; 운영 기본값 `triage_review`) |
+| `assessment.context_lines` | int (기본 5) | 판정/수정 프롬프트에 넣는 이슈 라인 주변 소스 줄 수 |
+| `assessment.full_file_max_lines` | int (기본 150) | 이 줄 수 이하 파일은 윈도우 대신 전체 주입 (`0` = 항상 윈도우) |
+| `assessment.include_rule_docs` | bool (기본 false) | SonarQube 룰 문서 주입 — fixer엔 how-to-fix, judge엔 Exceptions |
 | `modes.pr_premerge.delivery` | `comment` / `log` | 분석 리포트를 PR에 게시하거나 log만 |
 | `modes.pr_premerge.push_fix_commit` | bool | 검증된 수정을 커밋으로 PR 브랜치에 push |
 | `modes.*.max_issues_per_run` | int | 실행당 상한, `0` = 무제한 |

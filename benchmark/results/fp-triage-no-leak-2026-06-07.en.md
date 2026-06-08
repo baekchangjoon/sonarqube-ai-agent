@@ -2,6 +2,8 @@
 
 # FP Triage Benchmark — After Answer-Sheet Isolation (2026-06-07, round 3)
 
+> **Strategy note**: this benchmark ran with `assessment.strategy: "triage"` (option C — **pre-fix** screening judgment). The operational default has since moved to option D (`review`: fix attempt → FP escape → independent review), whose performance is not covered by these numbers.
+
 Through [round 2](fp-triage-precision-2026-06-07.en.md), the fp-corpus
 files carried the answer key in-band: Javadoc stating
 `expected: java:SXXXX` and "Why it is a false positive: ...". Round 3
