@@ -60,6 +60,32 @@ class TestSonarQubeClientUnit:
         client = SonarQubeClient(config)
         assert client.is_healthy() is False
 
+    def test_project_exists_true_via_components_show(self):
+        from unittest.mock import MagicMock
+        client = SonarQubeClient(SonarQubeConfig(url="http://x", token="t"))
+        client._get = MagicMock(return_value={"component": {"key": "p"}})
+        assert client.project_exists("p") is True
+        assert client._get.call_args[0][0] == "/api/components/show"
+
+    def test_project_exists_false_on_404(self):
+        import requests
+        from unittest.mock import MagicMock
+        client = SonarQubeClient(SonarQubeConfig(url="http://x", token="t"))
+        resp = MagicMock(status_code=404)
+        client._get = MagicMock(
+            side_effect=requests.HTTPError(response=resp))
+        assert client.project_exists("missing") is False
+
+    def test_project_exists_reraises_non_404(self):
+        import requests
+        from unittest.mock import MagicMock
+        client = SonarQubeClient(SonarQubeConfig(url="http://x", token="t"))
+        resp = MagicMock(status_code=403)
+        client._get = MagicMock(
+            side_effect=requests.HTTPError(response=resp))
+        with pytest.raises(requests.HTTPError):
+            client.project_exists("forbidden")
+
 
 class TestRuleDoc:
 
@@ -224,17 +250,23 @@ class TestSonarQubeClientIntegration:
         assert "code_smells" in measures
 
     def test_ephemeral_project_lifecycle(self, client):
+        """create → exists → delete roundtrip.
+
+        Requires project admin (create + delete). Tokens without it would
+        either fail or, worse, create a project they cannot remove — so
+        this only runs with SONAR_ADMIN_TESTS=1, and always attempts
+        cleanup so it never leaks a project."""
+        import os
+        if os.environ.get("SONAR_ADMIN_TESTS") != "1":
+            pytest.skip("SONAR_ADMIN_TESTS=1 not set (needs project admin)")
+
         test_key = "integration-test-ephemeral-lifecycle"
         test_name = "Integration Test Ephemeral"
-
-        created = client.create_project(test_key, test_name)
-        assert created is True
-
-        exists = client.project_exists(test_key)
-        assert exists is True
-
-        deleted = client.delete_project(test_key)
-        assert deleted is True
-
-        exists_after = client.project_exists(test_key)
-        assert exists_after is False
+        try:
+            assert client.create_project(test_key, test_name) is True
+            assert client.project_exists(test_key) is True
+            assert client.delete_project(test_key) is True
+            assert client.project_exists(test_key) is False
+        finally:
+            if client.project_exists(test_key):
+                client.delete_project(test_key)

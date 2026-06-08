@@ -89,11 +89,18 @@ class SonarQubeClient:
             return False
 
     def project_exists(self, project_key: str) -> bool:
-        resp = self._get("/api/projects/search", params={
-            "projects": project_key,
-        })
-        components = resp.get("components", [])
-        return any(c.get("key") == project_key for c in components)
+        # components/show needs only "browse" on the component; projects/
+        # search needs the global "administer" scope that many tokens
+        # (e.g. analysis-only) lack — 404 here means "does not exist".
+        try:
+            resp = self._get("/api/components/show", params={
+                "component": project_key,
+            })
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                return False
+            raise
+        return resp.get("component", {}).get("key") == project_key
 
     # ── Issue Retrieval ──────────────────────
 
