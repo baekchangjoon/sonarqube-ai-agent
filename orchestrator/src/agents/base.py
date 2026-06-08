@@ -88,9 +88,14 @@ class LLMAgent(ABC):
             "input_tokens": 0, "output_tokens": 0, "cost_usd": None,
         })
 
+    @staticmethod
+    def _doc_block(title: str, text: str) -> str:
+        return f"{title}:\n{text}\n\n" if text else ""
+
     def build_fix_prompt(self, issue_rule: str, issue_message: str,
                          file_path: str, line: int,
-                         source_context: str) -> str:
+                         source_context: str,
+                         rule_how_to_fix: str = "") -> str:
         return (
             f"Fix the following SonarQube issue by editing the file "
             f"in place.\n\n"
@@ -100,7 +105,10 @@ class LLMAgent(ABC):
             f"Line: {line}\n\n"
             f"Source context (around line {line}):\n"
             f"```java\n{source_context}\n```\n\n"
-            f"Requirements:\n"
+            + self._doc_block(
+                "How to fix it (from the SonarQube rule description)",
+                rule_how_to_fix)
+            + f"Requirements:\n"
             f"1. Edit {file_path} in place to fix ONLY the reported "
             f"issue. Do not change unrelated code.\n"
             f"2. Keep the existing code style.\n"
@@ -116,7 +124,8 @@ class LLMAgent(ABC):
     def build_fix_or_escape_prompt(self, issue_rule: str,
                                    issue_message: str, file_path: str,
                                    line: int,
-                                   source_context: str) -> str:
+                                   source_context: str,
+                                   rule_how_to_fix: str = "") -> str:
         """Option D first call: fix the issue OR escape as false positive."""
         return (
             f"Fix the following SonarQube issue by editing the file in "
@@ -128,7 +137,10 @@ class LLMAgent(ABC):
             f"Line: {line}\n\n"
             f"Source context (around line {line}):\n"
             f"```java\n{source_context}\n```\n\n"
-            f"First judge whether this finding is a FALSE positive (the "
+            + self._doc_block(
+                "How to fix it (from the SonarQube rule description)",
+                rule_how_to_fix)
+            + f"First judge whether this finding is a FALSE positive (the "
             f"analyzer is wrong, or the finding does not apply in this "
             f"context). You may read files for more context.\n\n"
             f"If FALSE positive: do NOT modify any file, and respond "
@@ -147,8 +159,15 @@ class LLMAgent(ABC):
 
     def build_fix_review_prompt(self, issue_rule: str, issue_message: str,
                                 file_path: str, line: int,
-                                diff: str) -> str:
+                                diff: str,
+                                source_context: str = "",
+                                fixer_claim: str = "",
+                                rule_how_to_fix: str = "") -> str:
         """Option D second call: independent review of an applied fix."""
+        source_block = (
+            f"Source before the fix (around line {line}):\n"
+            f"```java\n{source_context}\n```\n\n"
+        ) if source_context else ""
         return (
             f"You are an independent reviewer. Another AI agent modified "
             f"code to fix a SonarQube issue. Assess whether the change "
@@ -158,9 +177,15 @@ class LLMAgent(ABC):
             f"Message: {issue_message}\n"
             f"File: {file_path}\n"
             f"Line: {line}\n\n"
-            f"Applied change (unified diff):\n"
+            + source_block
+            + f"Applied change (unified diff):\n"
             f"```diff\n{diff}\n```\n\n"
-            f"{self._read_clause()}"
+            + self._doc_block("The fixing agent's stated rationale",
+                              fixer_claim)
+            + self._doc_block(
+                "How to fix it (from the SonarQube rule description)",
+                rule_how_to_fix)
+            + f"{self._read_clause()}"
             f"Respond with ONLY one JSON object as the last line:\n"
             f'{{"assessment": "APPROPRIATE" or "INAPPROPRIATE", '
             f'"confidence": <0.0-1.0>, "reason": "<one short sentence>"}}\n'
@@ -169,7 +194,8 @@ class LLMAgent(ABC):
     def build_fp_review_prompt(self, issue_rule: str, issue_message: str,
                                file_path: str, line: int,
                                source_context: str,
-                               claim_reason: str) -> str:
+                               claim_reason: str,
+                               rule_exceptions: str = "") -> str:
         """Option D second call: independent review of an FP claim."""
         return (
             f"You are an independent reviewer. Another AI agent judged "
@@ -182,7 +208,11 @@ class LLMAgent(ABC):
             f"Line: {line}\n\n"
             f"Source context (around line {line}):\n"
             f"```java\n{source_context}\n```\n\n"
-            f"Assess whether the false-positive judgment is correct. "
+            + self._doc_block(
+                "Documented exceptions where this rule does not apply "
+                "(from the SonarQube rule description)",
+                rule_exceptions)
+            + f"Assess whether the false-positive judgment is correct. "
             f"{self._read_clause()}"
             f"Respond with ONLY one JSON object as the last line:\n"
             f'{{"assessment": "AGREE_FALSE_POSITIVE" or "DISAGREE", '
@@ -191,7 +221,8 @@ class LLMAgent(ABC):
 
     def build_triage_prompt(self, issue_rule: str, issue_message: str,
                             file_path: str, line: int,
-                            source_context: str) -> str:
+                            source_context: str,
+                            rule_exceptions: str = "") -> str:
         return (
             f"You are reviewing a static analysis finding. Judge whether "
             f"it is a TRUE positive (a real issue worth fixing) or a "
@@ -203,7 +234,11 @@ class LLMAgent(ABC):
             f"Line: {line}\n\n"
             f"Source context (around line {line}):\n"
             f"```java\n{source_context}\n```\n\n"
-            f"{self._read_clause()}"
+            + self._doc_block(
+                "Documented exceptions where this rule does not apply "
+                "(from the SonarQube rule description)",
+                rule_exceptions)
+            + f"{self._read_clause()}"
             f"Respond with ONLY one JSON object as the last line:\n"
             f'{{"verdict": "TRUE_POSITIVE" or "FALSE_POSITIVE", '
             f'"confidence": <0.0-1.0>, "reason": "<one short sentence>"}}\n'

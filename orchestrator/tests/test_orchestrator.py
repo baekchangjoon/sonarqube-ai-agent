@@ -650,6 +650,7 @@ class TestPostReview:
         orch = _make_orchestrator(config)
         orch._sonar.run_scanner.return_value = True
         orch._sonar.get_quality_gate_status.return_value = "ERROR"
+        orch._sonar.get_raw_source.return_value = ""  # window path
         orch._sonar.get_source_lines.return_value = ["line"]
         orch._agent.generate_fix.side_effect = fix_side_effect
 
@@ -748,6 +749,26 @@ class TestPostReview:
         assert fixes[0].success is False
         orch._agent.generate_triage.assert_not_called()
 
+    def test_fix_review_prompt_receives_context_and_claim(self, _sleep,
+                                                          tmp_path):
+        def fix(prompt, wd):
+            (tmp_path / "src/main/java/Foo.java").write_text(
+                "class Foo { }\n")
+            return '{"verdict": "FIXED", "reason": "removed field"}'
+
+        orch, _ = self._review_orch(tmp_path, fix)
+        orch._agent.generate_triage.return_value = (
+            '{"assessment": "APPROPRIATE", "confidence": 0.9, "reason": "ok"}'
+        )
+
+        orch._triage_and_fix([_make_issue("K1")], str(tmp_path))
+
+        kwargs = orch._agent.build_fix_review_prompt.call_args[1]
+        # pre-fix content, captured before the agent edited the file
+        assert kwargs["source_context"] == "class Foo { int bad; }\n"
+        assert kwargs["fixer_claim"] == "removed field"
+        assert kwargs["rule_how_to_fix"] == ""  # rule docs off by default
+
     def test_file_change_wins_over_fp_claim(self, _sleep, tmp_path):
         def fix(prompt, wd):
             (tmp_path / "src/main/java/Foo.java").write_text(
@@ -764,6 +785,88 @@ class TestPostReview:
 
         # the edit happened, so it is treated as a fix and reviewed
         assert len(fixes) == 1 and not skipped
+
+
+@patch("src.orchestrator.time.sleep")
+class TestTriageThenReview:
+    """Option E: triage (pass 1) → fix TPs (pass 2) → review (pass 3)."""
+
+    def _orch(self, tmp_path, fix_side_effect=None):
+        config = _make_config(
+            assessment=AssessmentConfig(strategy="triage_review"),
+            pr_premerge=PrPremergeConfig(delivery="log"),
+        )
+        orch = _make_orchestrator(config)
+        orch._sonar.run_scanner.return_value = True
+        orch._sonar.get_quality_gate_status.return_value = "ERROR"
+        orch._sonar.get_raw_source.return_value = ""
+        orch._sonar.get_source_lines.return_value = ["line"]
+        if fix_side_effect:
+            orch._agent.generate_fix.side_effect = fix_side_effect
+        return orch
+
+    def test_false_positive_skips_fix_then_reviews(self, _sleep, tmp_path):
+        orch = self._orch(tmp_path)
+        orch._agent.generate_triage.side_effect = [
+            '{"verdict": "FALSE_POSITIVE", "confidence": 0.9, "reason": "r"}',
+            '{"assessment": "AGREE_FALSE_POSITIVE", "confidence": 0.8, '
+            '"reason": "confirmed"}',
+        ]
+
+        fixes, skipped = orch._triage_and_fix(
+            [_make_issue("K1")], str(tmp_path))
+
+        orch._agent.generate_fix.assert_not_called()  # no pass 2 for FP
+        assert not fixes and len(skipped) == 1
+        _, triage = skipped[0]
+        assert triage.verdict == "FALSE_POSITIVE"
+        assert triage.confidence == 0.8  # reviewer's, not triage's
+
+    def test_true_positive_fixes_then_reviews(self, _sleep, tmp_path):
+        target = tmp_path / "src/main/java/Foo.java"
+        target.parent.mkdir(parents=True)
+        target.write_text("class Foo { int bad; }\n")
+
+        def fix(prompt, wd):
+            target.write_text("class Foo { }\n")
+            return '{"fix_confidence": 0.9, "reason": "removed"}'
+
+        orch = self._orch(tmp_path, fix_side_effect=fix)
+        orch._agent.generate_triage.side_effect = [
+            '{"verdict": "TRUE_POSITIVE", "confidence": 0.9, "reason": "r"}',
+            '{"assessment": "APPROPRIATE", "confidence": 0.95, '
+            '"reason": "good"}',
+        ]
+
+        fixes, skipped = orch._triage_and_fix(
+            [_make_issue("K1")], str(tmp_path))
+
+        assert not skipped and len(fixes) == 1
+        assert fixes[0].success is True
+        assert fixes[0].fix_confidence == 0.95  # reviewer's confidence
+        orch._agent.build_fix_prompt.assert_called_once()
+        orch._agent.build_fix_review_prompt.assert_called_once()
+
+    def test_three_passes_invoked_for_true_positive(self, _sleep, tmp_path):
+        target = tmp_path / "src/main/java/Foo.java"
+        target.parent.mkdir(parents=True)
+        target.write_text("class Foo { int bad; }\n")
+
+        def fix(prompt, wd):
+            target.write_text("class Foo { }\n")
+            return "done"
+
+        orch = self._orch(tmp_path, fix_side_effect=fix)
+        orch._agent.generate_triage.side_effect = [
+            '{"verdict": "TRUE_POSITIVE", "confidence": 0.9, "reason": "r"}',
+            '{"assessment": "APPROPRIATE", "confidence": 0.9, "reason": "ok"}',
+        ]
+
+        orch._triage_and_fix([_make_issue("K1")], str(tmp_path))
+
+        # pass 1 (triage) + pass 3 (review) on the judge, pass 2 on fixer
+        assert orch._agent.generate_triage.call_count == 2
+        assert orch._agent.generate_fix.call_count == 1
 
 
 @patch("src.orchestrator.time.sleep")
@@ -846,7 +949,9 @@ class TestSourceContextFallback:
 
     def test_falls_back_to_local_file_when_sonar_has_no_source(
             self, tmp_path):
-        orch = _make_orchestrator()
+        orch = _make_orchestrator(_make_config(
+            assessment=AssessmentConfig(full_file_max_lines=0),
+        ))
         orch._sonar.get_source_lines.return_value = []  # new file in PR
         target = tmp_path / "src/main/java/Foo.java"
         target.parent.mkdir(parents=True)
@@ -860,6 +965,7 @@ class TestSourceContextFallback:
 
     def test_sonar_source_takes_precedence(self, tmp_path):
         orch = _make_orchestrator()
+        orch._sonar.get_raw_source.return_value = ""
         orch._sonar.get_source_lines.return_value = ["from sonar"]
 
         context = orch._get_source_context(_make_issue(), str(tmp_path))
@@ -868,9 +974,103 @@ class TestSourceContextFallback:
 
     def test_missing_local_file_returns_empty(self, tmp_path):
         orch = _make_orchestrator()
+        orch._sonar.get_raw_source.return_value = ""
         orch._sonar.get_source_lines.return_value = []
 
         assert orch._get_source_context(_make_issue(), str(tmp_path)) == ""
+
+
+class TestFullFileContext:
+
+    def _write_file(self, tmp_path, n_lines):
+        target = tmp_path / "src/main/java/Foo.java"
+        target.parent.mkdir(parents=True)
+        target.write_text("\n".join(f"line{i}" for i in range(1, n_lines + 1)))
+
+    def test_small_file_uses_server_snapshot(self, tmp_path):
+        orch = _make_orchestrator()  # default full_file_max_lines=150
+        server_text = "\n".join(f"srv{i}" for i in range(1, 21))
+        orch._sonar.get_raw_source.return_value = server_text
+        self._write_file(tmp_path, 20)  # local differs from snapshot
+
+        context = orch._get_source_context(_make_issue(line=10),
+                                           str(tmp_path))
+
+        assert context == server_text  # snapshot wins over local
+
+    def test_small_file_falls_back_to_local(self, tmp_path):
+        orch = _make_orchestrator()
+        orch._sonar.get_raw_source.return_value = ""  # new file in PR
+        self._write_file(tmp_path, 20)
+
+        context = orch._get_source_context(_make_issue(line=10),
+                                           str(tmp_path))
+
+        assert context.startswith("line1\n")
+        assert "line20" in context
+
+    def test_large_file_uses_window(self, tmp_path):
+        orch = _make_orchestrator(_make_config(
+            assessment=AssessmentConfig(full_file_max_lines=10),
+        ))
+        orch._sonar.get_raw_source.return_value = ""
+        orch._sonar.get_source_lines.return_value = ["from sonar"]
+        self._write_file(tmp_path, 20)
+
+        context = orch._get_source_context(_make_issue(line=10),
+                                           str(tmp_path))
+
+        assert context == "from sonar"
+
+
+class TestRuleDocInjection:
+
+    def _doc_orch(self, include=True):
+        orch = _make_orchestrator(_make_config(
+            assessment=AssessmentConfig(strategy="triage",
+                                        include_rule_docs=include),
+        ))
+        orch._sonar.get_source_lines.return_value = ["line"]
+        orch._sonar.get_rule_doc.return_value = {
+            "how_to_fix": "use a logger",
+            "exceptions": "literals under 5 chars are excluded",
+        }
+        return orch
+
+    def test_judge_prompt_gets_exceptions(self):
+        orch = self._doc_orch()
+        orch._agent.generate_triage.return_value = (
+            '{"verdict": "TRUE_POSITIVE", "confidence": 0.9, "reason": "r"}'
+        )
+
+        orch._triage_and_fix([_make_issue("K1")], "/tmp/proj")
+
+        kwargs = orch._agent.build_triage_prompt.call_args[1]
+        assert kwargs["rule_exceptions"] == (
+            "literals under 5 chars are excluded")
+
+    def test_fix_prompt_gets_how_to_fix(self):
+        orch = self._doc_orch()
+        orch._agent.generate_triage.return_value = (
+            '{"verdict": "TRUE_POSITIVE", "confidence": 0.9, "reason": "r"}'
+        )
+
+        orch._triage_and_fix([_make_issue("K1")], "/tmp/proj")
+
+        kwargs = orch._agent.build_fix_prompt.call_args[1]
+        assert kwargs["rule_how_to_fix"] == "use a logger"
+
+    def test_disabled_by_default_skips_rule_doc_fetch(self):
+        orch = self._doc_orch(include=False)
+        orch._agent.generate_triage.return_value = (
+            '{"verdict": "TRUE_POSITIVE", "confidence": 0.9, "reason": "r"}'
+        )
+
+        orch._triage_and_fix([_make_issue("K1")], "/tmp/proj")
+
+        orch._sonar.get_rule_doc.assert_not_called()
+        kwargs = orch._agent.build_triage_prompt.call_args[1]
+        assert kwargs["rule_exceptions"] == ""
 
 
 class TestOrchestratorSummary:

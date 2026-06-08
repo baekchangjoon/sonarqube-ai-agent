@@ -90,6 +90,54 @@ class TestLLMAgentInterface:
         assert "42" in prompt
         assert "in place" in prompt
 
+    def test_rule_docs_injected_when_given(self):
+        agent = AgentFactory.create(AgentConfig(type="kiro-cli"))
+        common = dict(issue_rule="java:S106", issue_message="m",
+                      file_path="Foo.java", line=1, source_context="code")
+
+        fix = agent.build_fix_prompt(**common, rule_how_to_fix="use a logger")
+        assert "How to fix it" in fix and "use a logger" in fix
+
+        triage = agent.build_triage_prompt(
+            **common, rule_exceptions="literals under 5 chars")
+        assert "Documented exceptions" in triage
+        assert "literals under 5 chars" in triage
+
+    def test_fix_review_prompt_carries_reviewer_inputs(self):
+        agent = AgentFactory.create(AgentConfig(type="kiro-cli"))
+        prompt = agent.build_fix_review_prompt(
+            issue_rule="java:S2095", issue_message="m",
+            file_path="Foo.java", line=23, diff="--- a\n+++ b",
+            source_context="Connection conn = open();",
+            fixer_claim="wrapped in try-with-resources",
+            rule_how_to_fix="Use try-with-resources.",
+        )
+        assert "Source before the fix" in prompt
+        assert "Connection conn = open();" in prompt
+        assert "stated rationale" in prompt
+        assert "wrapped in try-with-resources" in prompt
+        assert "How to fix it" in prompt
+        assert "Use try-with-resources." in prompt
+
+    def test_fix_review_prompt_optional_blocks_omitted(self):
+        agent = AgentFactory.create(AgentConfig(type="kiro-cli"))
+        prompt = agent.build_fix_review_prompt(
+            issue_rule="java:S2095", issue_message="m",
+            file_path="Foo.java", line=23, diff="--- a\n+++ b",
+        )
+        assert "Source before the fix" not in prompt
+        assert "stated rationale" not in prompt
+        assert "How to fix it" not in prompt
+
+    def test_rule_docs_omitted_by_default(self):
+        agent = AgentFactory.create(AgentConfig(type="kiro-cli"))
+        common = dict(issue_rule="java:S106", issue_message="m",
+                      file_path="Foo.java", line=1, source_context="code")
+
+        assert "How to fix it" not in agent.build_fix_prompt(**common)
+        assert "Documented exceptions" not in agent.build_triage_prompt(
+            **common)
+
 
 class TestBedrockConverse:
 

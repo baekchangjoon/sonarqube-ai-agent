@@ -44,11 +44,22 @@ scanner:
   java_test_binaries: "target/test-classes"
 
 # False-positive / fix-quality assessment strategy:
-#   "none":   fix every issue, no screening
-#   "triage": pre-fix LLM judgment; FALSE_POSITIVE → skip + report (C)
-#   "review": fix-with-FP-escape + independent LLM post-review (D)
+#   "none":          fix every issue, no screening
+#   "triage":        pre-fix LLM judgment; FALSE_POSITIVE → skip (C)
+#   "review":        fix-with-FP-escape + independent LLM post-review (D)
+#   "triage_review": judge triages → fixer fixes TPs → judge reviews (E)
+# Operational default: "triage_review" — best recall + precision in the
+# benchmark (see benchmark/results), at the highest per-issue cost.
 assessment:
-  strategy: "triage"
+  strategy: "triage_review"
+  # Source lines shown around the issue line in triage/fix prompts
+  context_lines: 5
+  # Files at most this many lines are injected whole instead of as a
+  # window (0 = always window)
+  full_file_max_lines: 150
+  # Inject SonarQube rule docs into prompts: how-to-fix for the fixer,
+  # documented exceptions for the judge
+  include_rule_docs: false
 
 modes:
   pr_premerge:

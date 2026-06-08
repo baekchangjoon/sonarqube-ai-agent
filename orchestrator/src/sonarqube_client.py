@@ -1,6 +1,8 @@
 import logging
+import re
 import subprocess
 from dataclasses import dataclass
+from html import unescape
 from typing import Optional
 
 import requests
@@ -49,6 +51,7 @@ class SonarQubeClient:
         self._session.headers.update({
             "Authorization": f"Bearer {self._token}",
         })
+        self._rule_doc_cache: dict = {}
 
     def is_healthy(self) -> bool:
         try:
@@ -158,22 +161,57 @@ class SonarQubeClient:
         measures = resp.get("component", {}).get("measures", [])
         return {m["metric"]: m.get("value", "0") for m in measures}
 
+    # ── Rule Documentation ───────────────────
+
+    def get_rule_doc(self, rule_key: str) -> dict:
+        """Rule description for prompt injection, cached per rule key.
+
+        Returns {"how_to_fix": str, "exceptions": str} as plain text;
+        a key is empty when the rule has no such section."""
+        if rule_key not in self._rule_doc_cache:
+            self._rule_doc_cache[rule_key] = self._fetch_rule_doc(rule_key)
+        return self._rule_doc_cache[rule_key]
+
+    def _fetch_rule_doc(self, rule_key: str) -> dict:
+        try:
+            resp = self._get("/api/rules/show", params={"key": rule_key})
+        except Exception:
+            logger.warning("Failed to fetch rule doc: %s", rule_key)
+            return {"how_to_fix": "", "exceptions": ""}
+        rule = resp.get("rule", {}) if isinstance(resp, dict) else {}
+        sections = {s.get("key"): s.get("content", "")
+                    for s in rule.get("descriptionSections", [])}
+        # Education-format rules split sections; legacy rules put
+        # everything (including Exceptions) in a single htmlDesc.
+        root = sections.get("root_cause") or rule.get("htmlDesc", "")
+        return {
+            "how_to_fix": _html_to_text(sections.get("how_to_fix", "")),
+            "exceptions": _html_to_text(_exceptions_html(root)),
+        }
+
     # ── Source Code ──────────────────────────
 
-    def get_source_lines(self, component_key: str,
-                         from_line: int, to_line: int) -> list[str]:
+    def get_raw_source(self, component_key: str) -> str:
+        """Whole file as analyzed by the last scan (server snapshot)."""
         try:
             resp = self._get("/api/sources/raw", params={
                 "key": component_key,
             })
             if isinstance(resp, str):
-                lines = resp.splitlines()
-                start = max(0, from_line - 1)
-                end = min(len(lines), to_line)
-                return lines[start:end]
+                return resp
         except Exception:
             logger.warning("Failed to fetch source: %s", component_key)
-        return []
+        return ""
+
+    def get_source_lines(self, component_key: str,
+                         from_line: int, to_line: int) -> list[str]:
+        text = self.get_raw_source(component_key)
+        if not text:
+            return []
+        lines = text.splitlines()
+        start = max(0, from_line - 1)
+        end = min(len(lines), to_line)
+        return lines[start:end]
 
     # ── Scanner Execution ────────────────────
 
@@ -215,6 +253,20 @@ class SonarQubeClient:
         if "application/json" in content_type:
             return resp.json()
         return resp.text
+
+
+def _exceptions_html(description_html: str) -> str:
+    """Slice the <h3>Exceptions</h3> subsection — where SonarQube
+    documents the cases a rule intentionally does not flag."""
+    match = re.search(r"<h3>\s*Exceptions\s*</h3>(.*?)(?=<h[1-3]|\Z)",
+                      description_html, re.DOTALL | re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def _html_to_text(html: str) -> str:
+    """Strip tags but keep text (incl. code inside <pre>) for prompts."""
+    text = unescape(re.sub(r"<[^>]+>", "", html))
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 # Maven-standard-layout Java defaults; override via scanner.* config.

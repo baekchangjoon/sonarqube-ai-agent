@@ -61,6 +61,61 @@ class TestSonarQubeClientUnit:
         assert client.is_healthy() is False
 
 
+class TestRuleDoc:
+
+    def _client(self, rule_payload):
+        from unittest.mock import MagicMock
+        client = SonarQubeClient(SonarQubeConfig(url="http://x", token="t"))
+        client._get = MagicMock(return_value={"rule": rule_payload})
+        return client
+
+    def test_extracts_how_to_fix_and_exceptions(self):
+        client = self._client({
+            "descriptionSections": [
+                {"key": "how_to_fix",
+                 "content": "<p>Use <code>constants</code>.</p>"},
+                {"key": "root_cause",
+                 "content": "<p>Dups are bad.</p>"
+                            "<h3>Exceptions</h3>"
+                            "<p>Literals under 5 chars are excluded.</p>"},
+            ],
+        })
+        doc = client.get_rule_doc("java:S1192")
+        assert doc["how_to_fix"] == "Use constants."
+        assert doc["exceptions"] == "Literals under 5 chars are excluded."
+
+    def test_missing_sections_yield_empty(self):
+        client = self._client({
+            "descriptionSections": [
+                {"key": "root_cause", "content": "<p>No exceptions here.</p>"},
+            ],
+        })
+        doc = client.get_rule_doc("java:S106")
+        assert doc == {"how_to_fix": "", "exceptions": ""}
+
+    def test_legacy_html_desc_fallback(self):
+        client = self._client({
+            "htmlDesc": "<p>Old format.</p><h3>Exceptions</h3>"
+                        "<p>volatile flags are fine.</p><h3>See</h3>x",
+        })
+        doc = client.get_rule_doc("java:S2142")
+        assert doc["exceptions"] == "volatile flags are fine."
+
+    def test_cached_per_rule_key(self):
+        client = self._client({"descriptionSections": []})
+        client.get_rule_doc("java:S1")
+        client.get_rule_doc("java:S1")
+        assert client._get.call_count == 1
+
+    def test_fetch_error_returns_empty(self):
+        from unittest.mock import MagicMock
+        client = SonarQubeClient(SonarQubeConfig(url="http://x", token="t"))
+        client._get = MagicMock(side_effect=Exception("boom"))
+        assert client.get_rule_doc("java:S1") == {
+            "how_to_fix": "", "exceptions": "",
+        }
+
+
 class TestScannerCommand:
 
     def test_remote_url_passes_through(self):

@@ -60,7 +60,10 @@ class ClaudeCodeAgent(LLMAgent):
             cwd=cwd, timeout=300, stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
-            logger.error("Claude Code failed: %s", result.stderr[-300:])
+            # usage-limit / API errors land on stdout as JSON, not stderr
+            logger.error("Claude Code failed (rc=%d): stderr=%s stdout=%s",
+                         result.returncode, result.stderr[-300:],
+                         result.stdout[-300:])
             return ""
         return self._parse_cli_json(result.stdout)
 

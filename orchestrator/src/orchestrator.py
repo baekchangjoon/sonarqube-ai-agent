@@ -289,11 +289,15 @@ class SonarQubeOrchestrator:
         "triage" (C): read-only pre-fix judgment, FP → skip + report.
         "review" (D): fix-with-FP-escape, then an independent LLM call
                       assesses the applied fix or the FP claim.
+        "triage_review" (E): judge triages, fixer fixes only true
+                      positives, judge then reviews each outcome.
         "none":       fix everything.
         """
         strategy = self._config.assessment.strategy
         if strategy == "review":
             return self._fix_with_post_review(issues, working_dir)
+        if strategy == "triage_review":
+            return self._triage_then_review(issues, working_dir)
 
         fixes, skipped = [], []
         for issue in issues:
@@ -316,6 +320,7 @@ class SonarQubeOrchestrator:
             issue_rule=issue.rule, issue_message=issue.message,
             file_path=issue.file_path, line=issue.line,
             source_context=self._get_source_context(issue, working_dir),
+            rule_exceptions=self._rule_doc(issue)["exceptions"],
         )
         try:
             raw = self._judge.generate_triage(prompt, working_dir)
@@ -357,6 +362,7 @@ class SonarQubeOrchestrator:
             issue_rule=issue.rule, issue_message=issue.message,
             file_path=issue.file_path, line=issue.line,
             source_context=source_context,
+            rule_how_to_fix=self._rule_doc(issue)["how_to_fix"],
         )
         target = Path(working_dir) / issue.file_path
         before = target.read_text() if target.exists() else ""
@@ -387,10 +393,14 @@ class SonarQubeOrchestrator:
     def _build_reviewed_fix(self, issue, source_context, raw,
                             before, after, working_dir) -> FixResult:
         diff = _unified_diff(before, after, issue.file_path)
+        fixer_data = _extract_json(raw) or {}
         review = self._review_outcome(
             self._judge.build_fix_review_prompt(
                 issue_rule=issue.rule, issue_message=issue.message,
                 file_path=issue.file_path, line=issue.line, diff=diff,
+                source_context=source_context,
+                fixer_claim=str(fixer_data.get("reason", "")),
+                rule_how_to_fix=self._rule_doc(issue)["how_to_fix"],
             ),
             issue, working_dir, ("APPROPRIATE", "INAPPROPRIATE"),
         )
@@ -414,6 +424,7 @@ class SonarQubeOrchestrator:
                 issue_rule=issue.rule, issue_message=issue.message,
                 file_path=issue.file_path, line=issue.line,
                 source_context=source_context, claim_reason=claim_reason,
+                rule_exceptions=self._rule_doc(issue)["exceptions"],
             ),
             issue, working_dir, ("AGREE_FALSE_POSITIVE", "DISAGREE"),
         )
@@ -447,6 +458,50 @@ class SonarQubeOrchestrator:
             reason=str(data.get("reason", "")),
         )
 
+    # ── Option E: triage → fix-true-positives → review ──
+
+    def _triage_then_review(self, issues: list[SonarIssue],
+                            working_dir: str):
+        """Three judged passes: the judge triages each issue, the fixer
+        edits only the true positives, the judge then reviews every
+        outcome (the applied fix or the false-positive skip)."""
+        fixes, skipped = [], []
+        for issue in issues:
+            source_context = self._get_source_context(issue, working_dir)
+            triage = self._triage_issue(issue, working_dir)  # pass 1
+            if triage.verdict == "FALSE_POSITIVE":
+                logger.info("Triage FP: %s %s (confidence=%s) — %s",
+                            issue.rule, issue.key,
+                            _fmt_confidence(triage.confidence), triage.reason)
+                skipped.append(self._build_reviewed_fp_skip(  # pass 3
+                    issue, source_context, triage.reason, working_dir))
+                continue
+            fixes.append(self._fix_then_review(  # pass 2 + pass 3
+                issue, source_context, working_dir))
+        return fixes, skipped
+
+    def _fix_then_review(self, issue: SonarIssue, source_context: str,
+                         working_dir: str) -> FixResult:
+        prompt = self._agent.build_fix_prompt(
+            issue_rule=issue.rule, issue_message=issue.message,
+            file_path=issue.file_path, line=issue.line,
+            source_context=source_context,
+            rule_how_to_fix=self._rule_doc(issue)["how_to_fix"],
+        )
+        target = Path(working_dir) / issue.file_path
+        before = target.read_text() if target.exists() else ""
+        try:
+            raw = self._agent.generate_fix(prompt, working_dir)  # pass 2
+        except Exception as e:
+            logger.error("Fix failed for %s: %s", issue.key, str(e))
+            return _empty_fix(issue, source_context, str(e))
+        after = target.read_text() if target.exists() else ""
+        if before == after:
+            return _empty_fix(issue, source_context, "No change applied")
+        return self._build_reviewed_fix(  # pass 3
+            issue, source_context, raw, before, after, working_dir,
+        )
+
     def _generate_single_fix(self, issue: SonarIssue,
                              working_dir: str) -> FixResult:
         source_context = self._get_source_context(issue, working_dir)
@@ -454,11 +509,21 @@ class SonarQubeOrchestrator:
             issue_rule=issue.rule, issue_message=issue.message,
             file_path=issue.file_path, line=issue.line,
             source_context=source_context,
+            rule_how_to_fix=self._rule_doc(issue)["how_to_fix"],
         )
         return self._invoke_agent(prompt, issue, source_context, working_dir)
 
     def _get_source_context(self, issue: SonarIssue,
                             working_dir: str) -> str:
+        full_limit = self._config.assessment.full_file_max_lines
+        if full_limit:
+            # Prefer the scan-time server snapshot: earlier fixes in the
+            # same run may already have mutated the local file the
+            # issue's line numbers refer to.
+            text = (self._sonar.get_raw_source(issue.component)
+                    or _read_local_file(working_dir, issue.file_path))
+            if text and len(text.splitlines()) <= full_limit:
+                return text
         span = self._config.assessment.context_lines
         lines = self._sonar.get_source_lines(
             issue.component, max(1, issue.line - span), issue.line + span,
@@ -470,6 +535,11 @@ class SonarQubeOrchestrator:
         # still see the code.
         return _local_source_context(working_dir, issue.file_path,
                                      issue.line, span)
+
+    def _rule_doc(self, issue: SonarIssue) -> dict:
+        if not self._config.assessment.include_rule_docs:
+            return {"how_to_fix": "", "exceptions": ""}
+        return self._sonar.get_rule_doc(issue.rule)
 
     def _invoke_agent(self, prompt: str, issue: SonarIssue,
                       source_context: str, working_dir: str) -> FixResult:
@@ -640,11 +710,17 @@ class SonarQubeOrchestrator:
         return "\n".join(lines)
 
 
+def _read_local_file(working_dir: str, file_path: str) -> str:
+    try:
+        return (Path(working_dir) / file_path).read_text()
+    except OSError:
+        return ""
+
+
 def _local_source_context(working_dir: str, file_path: str,
                           line: int, span: int = 5) -> str:
-    try:
-        text = (Path(working_dir) / file_path).read_text()
-    except OSError:
+    text = _read_local_file(working_dir, file_path)
+    if not text:
         return ""
     lines = text.splitlines()
     start = max(0, line - span - 1)

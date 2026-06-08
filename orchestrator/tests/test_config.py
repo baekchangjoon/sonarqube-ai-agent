@@ -144,6 +144,22 @@ class TestAppConfig:
         config = AppConfig.load(str(config_path))
         assert config.assessment.strategy == strategy
 
+    def test_assessment_context_defaults(self, tmp_path):
+        config_path = tmp_path / "c.yml"
+        config_path.write_text(yaml.dump({}))
+        config = AppConfig.load(str(config_path))
+        assert config.assessment.full_file_max_lines == 150
+        assert config.assessment.include_rule_docs is False
+
+    def test_assessment_context_overrides(self, tmp_path):
+        config_path = tmp_path / "c.yml"
+        config_path.write_text(yaml.dump({"assessment": {
+            "full_file_max_lines": 0, "include_rule_docs": True,
+        }}))
+        config = AppConfig.load(str(config_path))
+        assert config.assessment.full_file_max_lines == 0
+        assert config.assessment.include_rule_docs is True
+
     def test_invalid_assessment_strategy_raises(self, tmp_path):
         config_path = tmp_path / "c.yml"
         config_path.write_text(

@@ -85,15 +85,23 @@ class NightlyBatchConfig:
 @dataclass
 class AssessmentConfig:
     # False-positive / fix-quality assessment strategy:
-    #   "none":   fix every issue, no screening
-    #   "triage": pre-fix LLM judgment; FALSE_POSITIVE → skip + report (C)
-    #   "review": fix-with-FP-escape, then an independent LLM call
-    #             assesses the fix or the FP claim (D)
+    #   "none":          fix every issue, no screening
+    #   "triage":        pre-fix LLM judgment; FALSE_POSITIVE → skip (C)
+    #   "review":        fix-with-FP-escape, then an independent LLM call
+    #                    assesses the fix or the FP claim (D)
+    #   "triage_review": judge triages first (FP→skip), fixer fixes only
+    #                    true positives, judge then reviews each outcome (E)
     strategy: str = "none"
     # Source lines shown around the issue line in triage/fix prompts.
     # 5 keeps prompts small but can cut off class-level Javadoc; larger
     # values give harness-less judges more of the surrounding intent.
     context_lines: int = 5
+    # Files at most this many lines are injected whole instead of as a
+    # window — full intent for free on small files (0 = always window).
+    full_file_max_lines: int = 150
+    # Inject SonarQube rule docs into prompts: the how-to-fix section
+    # for the fixer, the documented exceptions for the judge.
+    include_rule_docs: bool = False
 
 
 @dataclass
@@ -216,14 +224,20 @@ def _parse_nightly(modes_raw: dict) -> NightlyBatchConfig:
 
 def _parse_assessment(raw: dict) -> AssessmentConfig:
     strategy = (raw or {}).get("strategy", "none")
-    if strategy not in ("none", "triage", "review"):
+    if strategy not in ("none", "triage", "review", "triage_review"):
         raise ValueError(
-            f"assessment.strategy must be 'none', 'triage' or 'review', "
-            f"got: {strategy}"
+            f"assessment.strategy must be 'none', 'triage', 'review' or "
+            f"'triage_review', got: {strategy}"
         )
     return AssessmentConfig(
         strategy=strategy,
         context_lines=int((raw or {}).get("context_lines", 5)),
+        full_file_max_lines=int(
+            (raw or {}).get("full_file_max_lines", 150)
+        ),
+        include_rule_docs=bool(
+            (raw or {}).get("include_rule_docs", False)
+        ),
     )
 
 
