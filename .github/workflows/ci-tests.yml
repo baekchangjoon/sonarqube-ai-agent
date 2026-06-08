@@ -25,10 +25,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: orchestrator/pyproject.toml
-      - name: Install (package + dev deps)
-        run: pip install -e ".[dev]"
+          cache-dependency-path: orchestrator/requirements.txt
+      - name: Install dependencies
+        # Install deps only (not the package): the tests import `src`
+        # directly via `python -m pytest`, and an editable build is not
+        # needed to run them.
+        run: pip install -r requirements.txt
       - name: Unit tests
         # integration tests need a live SonarQube + token and auto-skip
         # without SONAR_TOKEN; exclude them explicitly here.
-        run: pytest tests/ -m "not integration" -v
+        run: python -m pytest tests/ -m "not integration" -v
