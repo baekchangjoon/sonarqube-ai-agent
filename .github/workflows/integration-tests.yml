@@ -1,0 +1,39 @@
+name: Integration Tests
+
+# Manual only: these tests hit a live SonarQube server and need the
+# SONAR_TOKEN secret, which GitHub does NOT expose to pull_request runs
+# from forks. Keeping them off the PR gate also keeps that gate fast and
+# hermetic (see ci-tests.yml for the unit suite).
+on:
+  workflow_dispatch:
+    inputs:
+      project_key:
+        description: "SonarQube project key with scanned issues"
+        default: "fp-corpus"
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: orchestrator
+    env:
+      SONAR_URL: https://sonar.dev-temp-mail.com
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_PROJECT_KEY: ${{ inputs.project_key }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: orchestrator/requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Integration tests
+        # Lifecycle (create/delete project) needs admin and stays skipped
+        # unless SONAR_ADMIN_TESTS=1; the read-only checks run here.
+        run: python -m pytest tests/ -m integration -v
