@@ -11,6 +11,12 @@ class KiroCLIAgent(LLMAgent):
 
     Invokes kiro-cli in --no-interactive mode with MCP server support.
     Reference: https://kiro.dev/docs/cli/reference/cli-commands
+
+    Fixer only — not a valid judge. With --trust-all-tools a triage
+    would keep file-edit access, so supports_readonly_triage stays False
+    (from the base) and the orchestrator rejects it as a judge for
+    triage/review strategies. Use claude-code or bedrock-api for
+    judgment.
     """
 
     def __init__(self, agent_name: str = "sonarqube-fixer",

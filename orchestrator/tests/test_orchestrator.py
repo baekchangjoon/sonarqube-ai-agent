@@ -123,6 +123,39 @@ class TestJudgeAgentRouting:
         assert judge_call[1]["model"] == "opus"
 
 
+class TestJudgeReadonlyGuard:
+    """A judge that can't guarantee read-only triage is rejected for
+    judgment strategies (option ③ — gemini/kiro as judge)."""
+
+    def _build(self, strategy, judge_readonly):
+        config = _make_config(
+            agent=AgentConfig(type="claude-code", judge_type="gemini-cli"),
+            assessment=AssessmentConfig(strategy=strategy),
+        )
+        fixer, judge = MagicMock(), MagicMock()
+        fixer.name.return_value = "Fixer"
+        judge.name.return_value = "Gemini CLI"
+        judge.supports_readonly_triage.return_value = judge_readonly
+        with patch("src.orchestrator.AgentFactory") as mock_factory:
+            mock_factory.create.side_effect = [fixer, judge]
+            return SonarQubeOrchestrator(config)
+
+    @pytest.mark.parametrize("strategy",
+                             ["triage", "review", "triage_review"])
+    def test_write_enabled_judge_rejected(self, strategy):
+        with pytest.raises(ValueError, match="read-only"):
+            self._build(strategy, judge_readonly=False)
+
+    def test_none_strategy_allows_any_judge(self):
+        # no judgment pass → no read-only requirement
+        orch = self._build("none", judge_readonly=False)
+        assert orch is not None
+
+    def test_readonly_judge_accepted(self):
+        orch = self._build("triage_review", judge_readonly=True)
+        assert orch is not None
+
+
 class TestOrchestratorEphemeralKey:
 
     def test_ephemeral_key_format(self):

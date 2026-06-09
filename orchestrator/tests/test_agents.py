@@ -47,6 +47,18 @@ class TestAgentFactory:
         assert agent.supports_mcp() is False
         assert "test-model" in agent.name()
 
+    def test_readonly_triage_capability_by_backend(self):
+        # claude-code (Read-only triage) and bedrock-api (no file tools)
+        # are valid judges; gemini/kiro (write-enabled) are not.
+        def make(t, **kw):
+            return AgentFactory.create(AgentConfig(type=t, **kw))
+        assert make("claude-code").supports_readonly_triage() is True
+        assert make(
+            "bedrock-api",
+            bedrock={"model_id": "m"}).supports_readonly_triage() is True
+        assert make("gemini-cli").supports_readonly_triage() is False
+        assert make("kiro-cli").supports_readonly_triage() is False
+
     def test_create_invalid_type_raises(self):
         config = AgentConfig(type="nonexistent-agent")
         with pytest.raises(ValueError):

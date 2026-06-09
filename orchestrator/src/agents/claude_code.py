@@ -44,6 +44,10 @@ class ClaudeCodeAgent(LLMAgent):
         logger.info("Invoking Claude Code triage (model=%s)", self._model)
         return self._run(cmd, working_dir)
 
+    def supports_readonly_triage(self) -> bool:
+        # generate_triage restricts tools to Read — no file edits.
+        return True
+
     def _build_cmd(self, prompt: str) -> list[str]:
         return [
             "claude", "-p",
