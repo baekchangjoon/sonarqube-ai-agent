@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "sonarqube-ai-agent"
 version = "0.1.1"
 description = "LLM-agnostic orchestrator that auto-fixes SonarQube issues and triages false positives"
-readme = "../README.en.md"
+readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 dependencies = [
