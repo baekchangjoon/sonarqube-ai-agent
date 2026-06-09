@@ -60,6 +60,9 @@ class BedrockAPIAgent(LLMAgent):
     def supports_file_read(self) -> bool:
         return False  # no tool harness — prompt-only judgments
 
+    def supports_readonly_triage(self) -> bool:
+        return True  # prompt-only API call, no file tools at all
+
     def name(self) -> str:
         return f"Bedrock Converse ({self._model_id})"
 

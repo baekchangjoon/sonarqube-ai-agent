@@ -68,6 +68,26 @@ class TestAppConfig:
         assert config.sonarqube.url == "http://env-resolved:9000"
         assert config.sonarqube.token == "env-token-xyz"
 
+    def test_env_variable_embedded_substitution(self, tmp_path,
+                                                monkeypatch):
+        monkeypatch.setenv("SQ_HOST", "sonar.internal")
+        custom = {
+            "sonarqube": {"url": "https://${SQ_HOST}:9000/sonar"},
+            "modes": {},
+        }
+        config_path = tmp_path / "c.yml"
+        config_path.write_text(yaml.dump(custom))
+        config = AppConfig.load(str(config_path))
+        assert config.sonarqube.url == "https://sonar.internal:9000/sonar"
+
+    def test_env_variable_unset_becomes_empty(self, tmp_path):
+        custom = {"sonarqube": {"url": "http://${DEFINITELY_UNSET_VAR}:9000"},
+                  "modes": {}}
+        config_path = tmp_path / "c.yml"
+        config_path.write_text(yaml.dump(custom))
+        config = AppConfig.load(str(config_path))
+        assert config.sonarqube.url == "http://:9000"
+
     def test_ephemeral_key_pattern(self):
         config = AppConfig.load(
             str(Path(__file__).parent.parent / "config.yml")

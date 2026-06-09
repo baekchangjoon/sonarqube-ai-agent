@@ -12,6 +12,12 @@ class GeminiCLIAgent(LLMAgent):
     Requires: gemini CLI >= 0.30.x with cached credentials.
     Flags: --yolo (auto-approve all tool calls), -p (headless prompt).
     Reference: https://github.com/google-gemini/gemini-cli
+
+    Fixer only — not a valid judge. The CLI has no read-only mode, so a
+    triage would inherit --yolo's write access; supports_readonly_triage
+    stays False (from the base) and the orchestrator rejects it as a
+    judge for triage/review strategies. Use claude-code or bedrock-api
+    for judgment.
     """
 
     def generate_fix(self, prompt: str,

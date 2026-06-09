@@ -60,6 +60,7 @@ class SonarQubeOrchestrator:
             )
         else:
             self._judge = self._agent
+        self._assert_judge_can_triage()
         self._github = GitHubClient()
 
         logger.info(
@@ -68,6 +69,30 @@ class SonarQubeOrchestrator:
             self._agent.name(), self._judge.name(),
             config.sonarqube.url, config.scanner.pr_mode,
         )
+
+    # Strategies that run a read-only judgment pass on the judge agent.
+    _JUDGMENT_STRATEGIES = ("triage", "review", "triage_review")
+
+    def _assert_judge_can_triage(self) -> None:
+        """Reject a judge that cannot guarantee a read-only triage.
+
+        Judgment passes must not edit files. CLI fixers without a
+        read-only mode (gemini-cli --yolo, kiro-cli --trust-all-tools)
+        would silently keep write access during triage, so they are not
+        allowed as the judge for a judgment strategy — fail fast at
+        startup instead of mutating code mid-judgment. Configure
+        agent.judge_type as claude-code or bedrock-api."""
+        strategy = self._config.assessment.strategy
+        if (strategy in self._JUDGMENT_STRATEGIES
+                and not self._judge.supports_readonly_triage()):
+            raise ValueError(
+                f"assessment.strategy='{strategy}' runs read-only "
+                f"judgment passes, but the judge backend "
+                f"'{self._judge.name()}' cannot guarantee a read-only "
+                f"triage (no way to disable file edits). Set "
+                f"agent.judge_type to a read-only-capable backend "
+                f"(claude-code or bedrock-api)."
+            )
 
     @property
     def sonar(self) -> SonarQubeClient:

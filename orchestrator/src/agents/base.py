@@ -41,8 +41,7 @@ class LLMAgent(ABC):
 
     Every implementation must support:
     1. Generating fix code for a SonarQube issue
-    2. Generating test code for the fix
-    3. Reporting whether it supports MCP natively
+    2. Reporting whether it supports MCP natively
     """
 
     @abstractmethod
@@ -57,6 +56,17 @@ class LLMAgent(ABC):
         Defaults to generate_fix; implementations should override with
         a read-only tool configuration where possible."""
         return self.generate_fix(prompt, working_dir)
+
+    def supports_readonly_triage(self) -> bool:
+        """Whether generate_triage is guaranteed to make no file edits.
+
+        Judgment passes (FP triage, fix review) must not modify code.
+        The base generate_triage falls back to the write-enabled
+        generate_fix, so an agent returns True only if it overrides
+        generate_triage with a read-only configuration (or has no file
+        tools at all). The orchestrator refuses a judge that returns
+        False for any judgment strategy — see its __init__."""
+        return False
 
     @abstractmethod
     def supports_mcp(self) -> bool:

@@ -1,8 +1,11 @@
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+_ENV_PLACEHOLDER = re.compile(r"\$\{(\w+)\}")
 
 
 @dataclass
@@ -242,8 +245,13 @@ def _parse_assessment(raw: dict) -> AssessmentConfig:
 
 
 def _resolve_env(value: str) -> str:
-    """Replace ${VAR} placeholders with environment variable values."""
-    if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
-        env_key = value[2:-1]
-        return os.environ.get(env_key, "")
-    return value
+    """Replace every ${VAR} in the string with its environment value.
+
+    Substitutes embedded placeholders too (e.g. "http://${HOST}:9000"),
+    not just whole-string ones; an unset variable becomes "" (same as
+    the previous whole-string behavior)."""
+    if not isinstance(value, str):
+        return value
+    return _ENV_PLACEHOLDER.sub(
+        lambda m: os.environ.get(m.group(1), ""), value
+    )
