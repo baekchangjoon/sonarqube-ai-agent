@@ -1,7 +1,17 @@
 # Remote SonarQube (CE + community branch/PR plugin) — native PR mode
 agent:
   type: "claude-code"
-  # 구성 A: 수정=Sonnet(Claude Code 하네스), 판정·리뷰=Opus 4.6 on Bedrock
+  # judge_type/judge_model = judge(FP triage·fix review)를 fixer와 다른
+  # backend/model로 라우팅. 비우면 judge = fixer(claude-code sonnet) 동일 모델 —
+  # 단일 모델이 사전 triage와 사후 review를 모두 수행(두 패스의 오류가 상관됨).
+  # ⚠️ 환경 의존적 값은 그 도구/자격이 있는 환경에서만 동작 — gemini-cli는 `gemini`
+  #    CLI, bedrock-api는 AWS 자격증명이 필요. 미설치 환경(타 PC·일부 CI)에서 실행하면
+  #    실패하므로, 그런 환경에 공유할 기본값으로는 박지 말 것.
+  # 다른 예시:
+  #   judge_type: "gemini-cli"                          # 교차벤더(Gemini)
+  #   judge_type: "claude-code"   judge_model: "opus"   # 같은 벤더 상위 모델
+  #   judge_type: ""                                    # judge = fixer 동일 모델
+  # 아래 구성 A: 수정=Sonnet(Claude Code 하네스), 판정·리뷰=Opus 4.6 on Bedrock(CI OIDC 검증됨)
   judge_type: "bedrock-api"
   judge_model: "global.anthropic.claude-opus-4-6-v1"
 
@@ -22,7 +32,7 @@ scanner:
     maven:3.9-eclipse-temurin-17 mvn -q clean compile test-compile
 
 assessment:
-  strategy: "triage"   # C안; D안 비교 실행은 config-remote-review.yml
+  strategy: "triage"   # none / triage(C) / review(D) / triage_review(E)
 
 modes:
   pr_premerge:
